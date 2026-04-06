@@ -24,7 +24,7 @@ def run_agent(
     harness: ToolHarness | None = None,
     max_iterations: int = 15,
 ) -> AgentRun:
-    client = get_client()
+    client = get_client(model)
     harness = harness or create_default_harness()
     harness.reset()
 

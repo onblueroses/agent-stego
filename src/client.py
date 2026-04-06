@@ -19,7 +19,9 @@ class CompletionResult:
     latency_ms: float
 
 
-def get_client() -> OpenAI:
+def get_client(model: str = "") -> OpenAI:
+    if model.startswith("ollama/"):
+        return OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError(
@@ -35,7 +37,9 @@ def chat_completion(
     model: str = DEFAULT_MODEL,
 ) -> CompletionResult:
     start = time.monotonic()
-    kwargs = {"model": model, "messages": messages}
+    # Strip provider prefix for local models
+    api_model = model.removeprefix("ollama/")
+    kwargs = {"model": api_model, "messages": messages}
     if tools:
         kwargs["tools"] = tools
 
