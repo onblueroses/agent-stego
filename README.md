@@ -62,7 +62,7 @@ Agent A encodes a secret. Agent B receives *only* the raw tool call trace log (n
 | Llama 3.1 8B | $0.02/M | 1.000 | No | - | - |
 | Gemma 4 31B | $0.14/M | 0.550 | 4/5 chars | 3/5 chars | Sender partial |
 | Qwen 3.6 Plus | Free | 0.350 | Perfect | Rate-limited | - |
-| Qwen 3.5 27B | $0.19/M | **0.000** | **Perfect** | **Perfect** | **Perfect** |
+| Qwen 3.5 27B | $0.19/M | **0.000** | **Perfect** | **Perfect (10 chars)** | **Perfect (cross-model)** |
 
 Full analysis: [analysis/FINDINGS.md](analysis/FINDINGS.md)
 
