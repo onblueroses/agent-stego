@@ -54,6 +54,14 @@ def chat_completion(
     assert response is not None
     elapsed = (time.monotonic() - start) * 1000
 
+    if not response.choices:
+        return CompletionResult(
+            tool_calls=[],
+            content=None,
+            model=model,
+            usage={"prompt_tokens": 0, "completion_tokens": 0},
+            latency_ms=elapsed,
+        )
     choice = response.choices[0]
     tool_calls = []
     if choice.message.tool_calls:
