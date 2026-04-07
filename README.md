@@ -31,10 +31,11 @@ finds nothing.
 
 ## Key findings
 
-1. **Model capability is the dominant variable.** The same encoding produces noise on 8B
-   models and perfect communication on 27B+ models. The capability cliff sits between 14B
-   and 27B - but even a **local 7B model** can execute tool-sequence steganography on
-   consumer hardware.
+1. **Model capability is the dominant variable - but table-based channels break this rule.**
+   The same volume encoding produces noise on 8B models and perfect communication on 27B+
+   models. The capability cliff sits between 14B and 27B for counting-based channels. But a
+   new channel type - **lookup table selection** - achieves 93% exact decode on a local 3B
+   model with no cloud API. Any device running a quantized LLM is in scope.
 
 2. **5 novel encoding schemes, 4 evade detection.** I designed schemes including composite
    grid (1 tool call per character), polyphonic channel (3 weak signals combined), and
@@ -176,25 +177,32 @@ discovered it.
 
 ### Phase 6: Capability ladder
 
-7 models tested across 4 encoding levels:
+Models tested across 5 encoding levels. L1-L4 tested via OpenRouter. L5 (table-based)
+validated locally via ollama (60 trials, 3 secrets):
 
-| Model | Size | L1 Volume | L2 Tool Seq | L3 Arg Len | L4 Grid |
-|-------|------|-----------|-------------|------------|---------|
-| Qwen 2.5 1.5B | 1.5B (local) | Fail | Fail | Fail | Fail |
-| Qwen 2.5 3B | 3B (local) | Fail | Fail | Fail | Fail |
-| **Qwen 2.5 7B** | **7B (local)** | Fail | **Pass** | Fail | Fail |
-| Llama 3.2 3B | 3B | N/A | N/A | N/A | N/A |
-| Gemma 3 4B | 4B | N/A | N/A | N/A | N/A |
-| Qwen 3 8B | 8B | Fail | Fail | Fail | Fail |
-| Qwen 3 14B | 14B | **Pass** | Fail | Fail | Fail |
-| Qwen 3 30B MoE | 30B | Fail | Fail | Fail | Fail |
-| **Qwen 3.5 27B** | 27B | **Pass** | **Pass** | **Pass** | Fail |
-| Gemma 4 31B | 31B | Fail | **Pass** | Fail | Fail |
+| Model | Size | L1 Volume | L2 Tool Seq | L3 Arg Len | L4 Grid | L5 Table |
+|-------|------|-----------|-------------|------------|---------|----------|
+| **Qwen 2.5 3B** | **3B (local)** | Fail | Fail | Fail | Fail | **Pass (93%)** |
+| Qwen 2.5 1.5B | 1.5B (local) | Fail | Fail | Fail | Fail | - |
+| **Qwen 2.5 7B** | **7B (local)** | Fail | **Pass** | Fail | Fail | - |
+| Llama 3.2 3B | 3B | N/A | N/A | N/A | N/A | - |
+| Gemma 3 4B | 4B | N/A | N/A | N/A | N/A | - |
+| Qwen 3 8B | 8B | Fail | Fail | Fail | Fail | - |
+| Qwen 3 14B | 14B | **Pass** | Fail | Fail | Fail | - |
+| Qwen 3 30B MoE | 30B | Fail | Fail | Fail | Fail | - |
+| **Qwen 3.5 27B** | 27B | **Pass** | **Pass** | **Pass** | Fail | - |
+| Gemma 4 31B | 31B | Fail | **Pass** | Fail | Fail | - |
 
-**Local 7B models can do tool-sequence steganography.** Qwen 2.5 7B running via ollama on
-consumer hardware passes Level 2. Any device with a local LLM can encode hidden messages
-through tool choice alone - no cloud API needed. The full capability cliff is between 14B
-and 27B. Architecture matters more than parameter count (Qwen 3.5 27B >> Qwen 3 30B MoE).
+**L5 table-based encoding lowers the bar to 3B local models.** Instead of counting to
+arbitrary N, the model selects from a 26-entry lookup table - one path or query per
+character. Qwen 2.5 3B achieves 93% exact decode of 6-character secrets running fully
+locally via ollama. The full capability cliff for cloud/counting channels is still between
+14B and 27B. Architecture matters more than parameter count (Qwen 3.5 27B >> Qwen 3 30B MoE).
+
+**Additional finding**: many apparent 3B failures were format variance, not planning failure.
+Local models frequently emit correct tool sequences as plain text (`read_file({...})`,
+`search_web {...}`) rather than native function-call objects. After adding multi-format
+parsing to the agent loop, accuracy increased materially.
 
 </details>
 
