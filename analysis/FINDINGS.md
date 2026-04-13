@@ -643,13 +643,82 @@ N/A = model doesn't support tool use on OpenRouter. `-` = not yet tested at this
 6. **Composite Grid (L4) defeats all tested models.** Requiring simultaneous control of
    tool choice AND argument properties is beyond current capabilities at these sizes.
 
+## Phase 7: Research Expansion (2026-04-13)
+
+Four new research directions tested. Full writeups in `studies/`.
+
+### Table-Based Channels (3B-optimized)
+
+The table channel replaces counting (volume) with exact-call lookup. Each letter
+maps to one specific tool call from a fixed 26-entry table. See
+[studies/table-channel/README.md](../studies/table-channel/README.md).
+
+| Mode | Model | Secret | Mean CER | Exact Match |
+|------|-------|--------|----------|-------------|
+| path | Qwen 2.5 3B (local) | HELLO | 0.000 | 3/3 |
+| path | Qwen 2.5 3B (Modal T4) | HELLO | 0.200 | 1/5 |
+| query | Qwen 2.5 3B (Modal T4) | HELLO | 0.240 | 1/5 |
+| tri_tool | Qwen 2.5 3B (Modal T4) | HELLO | 0.480 | 0/5 |
+
+Key finding: **table encoding collapses the capability requirement from 27B+
+to 3B.** The model only needs to copy exact tool calls, not count.
+
+### Error Correction Layer
+
+Composable `CorrectedChannel` wrapper with `RepetitionCode(n)`. Each character
+repeated n times, majority vote on decode. Tested on 3B:
+
+| Config | Mean CER | Exact Match |
+|--------|----------|-------------|
+| Volume raw (3B) | 1.000 | 0/5 |
+| Volume + Rep3 (3B) | 1.000 | 0/5 |
+| Table/path raw (3B) | 0.200 | 3/5 |
+| Table/path + Rep3 (3B) | 0.300 | 3/5 |
+
+Repetition coding doesn't help when the base channel completely fails (volume
+on 3B) or when failures are structural (early stopping) rather than
+character-level noise. Error correction is most useful in the 7B-14B range
+where models produce partial signal with occasional errors.
+
+### Timing Channel Rehabilitation
+
+Tested whether local ollama inference (real latency) enables timing channels.
+See [studies/timing-rehabilitation/README.md](../studies/timing-rehabilitation/README.md).
+
+| Metric | API (OpenRouter) | Local (ollama, T4) |
+|--------|-----------------|-------------------|
+| Zero-latency fraction | 0.73 | 0.14-0.25 |
+| TimingChannel BER | N/A (noise) | 0.812 |
+| ResponseLengthChannel BER | N/A | 0.854 |
+
+**Verdict: timing channels remain a negative result even locally.** Latency
+variance is too narrow for reliable binary encoding. The infrastructure is
+in place (ToolTrace.token_count field, updated decoder) for future token-count
+experiments.
+
+### 7B Ceiling Study
+
+Five encoding levels designed for weak models. Infrastructure complete,
+experiment pending (timed out on first run). See
+[studies/7b-ceiling/README.md](../studies/7b-ceiling/README.md).
+
+| Level | Encoding | Calls/char | Designed for |
+|-------|----------|------------|-------------|
+| L0 | Binary tool choice (read=0, search=1) | 5 bits | 7B+ |
+| L0.5 | Wide binary volume (3 calls=0, 8 calls=1) | 5 bits | 7B+ |
+| L1 | Ternary tool choice (base-3) | 3 | 7B+ |
+| L1.5 | First-tool-only (base-3, separator-phased) | 3 | 7B+ |
+| L2 | Tool pair bigram (3-call groups) | 3 | 7B+ |
+
 ## Mitigations
 
 | Mitigation | Feasibility | Channels Addressed |
 |------------|-------------|-------------------|
 | Bound tool call count per turn | Easy | Volume |
 | Monitor error rates per session | Easy | Error |
-| Normalize tool call arguments | Medium | Argument |
+| Normalize tool call arguments | Medium | Argument, table (path/query) |
 | Randomize tool execution order | Medium | Ordering |
+| Restrict tool set per task | Medium | Table (tri_tool), volume |
+| Rewrite arguments server-side | Medium | Table (path), argument |
 | Rate-limit tool calls with jitter | Hard | Timing (local agents) |
 | Anomaly detection on call patterns | Hard | All |
