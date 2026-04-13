@@ -7,3 +7,4 @@ from .simple import (  # noqa: F401
     WideBinaryVolume,
 )
 from .table import TableChannel  # noqa: F401
+from .table_multiturn import MultiTurnTableChannel  # noqa: F401
