@@ -698,17 +698,26 @@ experiments.
 
 ### 7B Ceiling Study
 
-Five encoding levels designed for weak models. Infrastructure complete,
-experiment pending (timed out on first run). See
-[studies/7b-ceiling/README.md](../studies/7b-ceiling/README.md).
+Five encoding levels designed for weak models, tested on Qwen 2.5 7B
+(Modal T4 GPU). See [studies/7b-ceiling/README.md](../studies/7b-ceiling/README.md).
 
-| Level | Encoding | Calls/char | Designed for |
-|-------|----------|------------|-------------|
-| L0 | Binary tool choice (read=0, search=1) | 5 bits | 7B+ |
-| L0.5 | Wide binary volume (3 calls=0, 8 calls=1) | 5 bits | 7B+ |
-| L1 | Ternary tool choice (base-3) | 3 | 7B+ |
-| L1.5 | First-tool-only (base-3, separator-phased) | 3 | 7B+ |
-| L2 | Tool pair bigram (3-call groups) | 3 | 7B+ |
+| Level | Encoding | HI CER | HELLO CER | Pass? |
+|-------|----------|--------|-----------|-------|
+| L0 | Binary tool choice | 1.000 | 0.900 | FAIL |
+| L0.5 | Wide binary volume | - | - | TIMEOUT |
+| L1 | Ternary tool choice | 0.500 | 0.800 | FAIL (best) |
+| L1.5 | First-tool-only | 0.833 | 0.900 | FAIL |
+| L2 | Tool pair bigram | 0.767 | 0.700 | FAIL |
+
+**All levels fail.** The 7B model cannot reliably execute any arithmetic-based
+encoding. L1 (ternary) produced one perfect decode of "HI" but mean CER is
+still 0.500. Counterintuitively, the simplest encoding (L0, binary) performs
+worst - the model ignores the encoding and makes task-relevant tool calls.
+
+Key insight: the capability cliff is not about model size but encoding design.
+The table channel works on 3B because it requires copying exact calls, not
+arithmetic. These results confirm that better table designs, not larger models,
+are the productive research direction.
 
 ## Mitigations
 

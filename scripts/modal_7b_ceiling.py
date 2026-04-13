@@ -1,4 +1,7 @@
-"""Run ONLY the 7B ceiling experiment on Modal GPU with extended timeout.
+"""Run 7B ceiling experiment on Modal GPU - one level per function call.
+
+Each encoding level runs as a separate Modal function invocation,
+avoiding the subprocess timeout that kills the monolithic run.
 
 Usage:
     modal run scripts/modal_7b_ceiling.py
@@ -28,6 +31,8 @@ image = (
 
 model_volume = modal.Volume.from_name("ollama-models", create_if_missing=True)
 
+LEVELS = ["L0", "L0.5", "L1", "L1.5", "L2"]
+
 
 def _start_ollama():
     subprocess.Popen(
@@ -51,13 +56,14 @@ def _start_ollama():
     image=image,
     gpu="T4",
     volumes={"/root/.ollama/models": model_volume},
-    timeout=3600,
+    timeout=1200,
 )
-def run_7b_ceiling():
+def run_single_level(level: str):
+    """Run one encoding level of the 7B ceiling experiment."""
     _start_ollama()
 
     name = "qwen2.5:7b"
-    print(f"Pulling {name}...")
+    print(f"[{level}] Pulling {name}...")
     subprocess.run(["ollama", "pull", name], check=True)
     model_volume.commit()
 
@@ -67,19 +73,20 @@ def run_7b_ceiling():
     env = {
         **os.environ,
         "MODELS": "ollama/qwen2.5:7b",
-        "LEVELS": "L0,L0.5,L1,L1.5,L2",
-        "TRIALS_SHORT": "5",
-        "TRIALS_LONG": "3",
+        "LEVELS": level,
+        "TRIALS_SHORT": "3",
+        "TRIALS_LONG": "2",
         "WITH_CORRECTION": "0",
     }
 
+    print(f"[{level}] Starting experiment...")
     result = subprocess.run(
         ["python", "experiments/7b_ceiling.py"],
         cwd="/app",
         env=env,
         capture_output=True,
         text=True,
-        timeout=3000,
+        timeout=900,
     )
 
     print(result.stdout)
@@ -93,6 +100,7 @@ def run_7b_ceiling():
             findings[f.name] = json.loads(f.read_text())
 
     return {
+        "level": level,
         "returncode": result.returncode,
         "stdout": result.stdout,
         "findings": findings,
@@ -101,15 +109,41 @@ def run_7b_ceiling():
 
 @app.local_entrypoint()
 def main():
-    print("Launching 7B ceiling on Modal GPU (T4, 1h timeout)...")
-    result = run_7b_ceiling.remote()  # type: ignore[attr-defined]
+    print(f"Launching 7B ceiling on Modal GPU - {len(LEVELS)} levels in parallel...")
 
-    print(f"\nReturn code: {result['returncode']}")
+    # Fan out: one function call per level, all in parallel
+    handles = []
+    for level in LEVELS:
+        handle = run_single_level.spawn(level)  # type: ignore[attr-defined]
+        handles.append((level, handle))
+        print(f"  Spawned: {level}")
 
-    for name, data in result.get("findings", {}).items():
-        out_dir = Path("findings/7b_ceiling")
-        out_dir.mkdir(parents=True, exist_ok=True)
+    # Collect results
+    all_findings = {}
+    for level, handle in handles:
+        try:
+            result = handle.get()
+            code = result["returncode"]
+            status = "OK" if code == 0 else f"FAIL({code})"
+            print(f"\n[{status}] {level}")
+            if result["stdout"]:
+                # Print last 40 lines of output (the interesting part)
+                lines = result["stdout"].strip().split("\n")
+                for line in lines[-40:]:
+                    print(f"  {line}")
+
+            for name, data in result.get("findings", {}).items():
+                all_findings[f"{level}_{name}"] = data
+        except Exception as e:
+            print(f"\n[ERROR] {level}: {e}")
+
+    # Save findings locally
+    out_dir = Path("findings/7b_ceiling")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, data in all_findings.items():
         out_path = out_dir / name
         with open(out_path, "w") as f:
             json.dump(data, f, indent=2)
         print(f"Saved: {out_path}")
+
+    print(f"\nDone. {len(all_findings)} result files saved.")
