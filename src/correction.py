@@ -61,6 +61,50 @@ class RepetitionCode(CorrectionStrategy):
         return "".join(chars)
 
 
+class InterleavedRepetitionCode(CorrectionStrategy):
+    """Interleaved repetition coding: spreads copies across the message.
+
+    Instead of "HHHIII" (grouped), produces "HIHIHI" (interleaved).
+    On decode, de-interleaves by position mod k (where k = original length),
+    then majority-votes each group.
+
+    Interleaving distributes burst errors across characters, improving
+    correction when errors cluster in one region of the trace.
+    """
+
+    def __init__(self, n: int = 3):
+        if n < 3 or n % 2 == 0:
+            raise ValueError("Repetition count must be odd and >= 3")
+        self.n = n
+        self._last_k: int | None = None  # original message length from add_redundancy
+
+    def add_redundancy(self, message: str) -> str:
+        # "HI" with n=3 -> "HIHIHI"
+        self._last_k = len(message)
+        return message * self.n
+
+    def correct(self, decoded: str) -> str:
+        if not decoded:
+            return ""
+        # Use stored k if available (set by add_redundancy), else estimate
+        k = self._last_k if self._last_k is not None else len(decoded) // self.n
+        if k == 0:
+            return decoded
+        chars = []
+        for pos in range(k):
+            # Gather the character at position pos from each repetition
+            group = [
+                decoded[rep * k + pos]
+                for rep in range(self.n)
+                if rep * k + pos < len(decoded)
+            ]
+            if group:
+                counts = Counter(group)
+                winner = counts.most_common(1)[0][0]
+                chars.append(winner)
+        return "".join(chars)
+
+
 class CorrectedChannel(BaseChannel):
     """Wraps any BaseChannel with error correction.
 
