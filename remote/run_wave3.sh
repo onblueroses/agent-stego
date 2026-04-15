@@ -183,3 +183,8 @@ cat > "$FINDINGS_BASE/done.json" <<EOF
 EOF
 
 echo "Results in $FINDINGS_BASE/"
+
+# Chain into wave 4
+echo ""
+echo "Launching wave 4..."
+exec bash remote/run_wave4.sh
