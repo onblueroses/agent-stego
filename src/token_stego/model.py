@@ -68,6 +68,22 @@ class StegoModel:
         """Convert token IDs back to text."""
         return self.tokenizer.decode(ids, skip_special_tokens=False)
 
+    def get_logits(self, input_ids: list[int]) -> torch.Tensor:
+        """Get raw logits for the next token. Gradient-compatible.
+
+        Unlike get_distribution, this returns a torch Tensor (not a list)
+        and does NOT apply no_grad, so gradients can flow through
+        perturbation networks applied to the output.
+
+        Returns:
+            Logits tensor of shape (vocab_size,) on the model's device.
+        """
+        ids_tensor = torch.tensor([input_ids], dtype=torch.long)
+        if hasattr(self.model, "device"):
+            ids_tensor = ids_tensor.to(self.model.device)
+        outputs = self.model(ids_tensor)
+        return outputs.logits[0, -1, :]
+
     @torch.no_grad()
     def get_distribution(
         self,
