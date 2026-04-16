@@ -144,7 +144,7 @@ def train_baseline_probe(
     temperature: float,
     top_p: float,
     n_train: int,
-) -> tuple[ActivationProbe, list[LatentSnapshot], list[LatentSnapshot], float]:
+) -> tuple[ActivationProbe, list[LatentSnapshot], list[LatentSnapshot], float, int]:
     """Train a baseline probe and return it with test snapshots and AUC."""
     log("  Capturing normal activations...")
     normal_snaps = capture_snapshots(model, normal_pairs, temperature, top_p)
@@ -156,17 +156,19 @@ def train_baseline_probe(
     test_normal = normal_snaps[n_train:]
     test_stego = stego_snaps[n_train:]
 
-    log("  Training baseline probe...")
-    probe = train_probe(train_normal, train_stego, epochs=200)
+    # Use last layer only - must match soft-embedding dim in adversarial training
+    last_layer = max(normal_snaps[0].hidden_states.keys())
+    log(f"  Training baseline probe (layer={last_layer})...")
+    probe = train_probe(train_normal, train_stego, layer=last_layer, epochs=200)
 
     test_snaps = test_normal + test_stego
     test_labels = [0] * len(test_normal) + [1] * len(test_stego)
-    metrics = evaluate_probe(probe, test_snaps, test_labels)
+    metrics = evaluate_probe(probe, test_snaps, test_labels, layer=last_layer)
     baseline_auc: float = metrics["auc"]
 
     log(f"  Baseline probe AUC: {baseline_auc:.3f}")
 
-    return probe, test_normal, test_stego, baseline_auc
+    return probe, test_normal, test_stego, baseline_auc, last_layer
 
 
 def run_single_config(
@@ -182,6 +184,7 @@ def run_single_config(
     max_tokens: int,
     n_train: int,
     n_test: int,
+    last_layer: int | None = None,
 ) -> dict:
     """Run a single sweep configuration: train perturbation, evaluate, test recovery."""
     # Train perturbation
@@ -245,7 +248,7 @@ def run_single_config(
     perturbed_snaps = capture_snapshots(model, perturbed_pairs, temperature, top_p)
     test_snaps = list(test_normal_snaps) + perturbed_snaps
     test_labels = [0] * len(test_normal_snaps) + [1] * len(perturbed_snaps)
-    post_metrics = evaluate_probe(probe, test_snaps, test_labels)
+    post_metrics = evaluate_probe(probe, test_snaps, test_labels, layer=last_layer)
     post_auc: float = post_metrics["auc"]
 
     # Retrain fresh probe on perturbed stego (retrained AUC)
@@ -260,10 +263,14 @@ def run_single_config(
     fresh_train_stego = all_stego[:split_s]
     fresh_test_stego = all_stego[split_s:] or all_stego[:split_s]
 
-    fresh_probe = train_probe(fresh_train_normal, fresh_train_stego, epochs=200)
+    fresh_probe = train_probe(
+        fresh_train_normal, fresh_train_stego, layer=last_layer, epochs=200
+    )
     fresh_test = fresh_test_normal + fresh_test_stego
     fresh_labels = [0] * len(fresh_test_normal) + [1] * len(fresh_test_stego)
-    retrained_metrics = evaluate_probe(fresh_probe, fresh_test, fresh_labels)
+    retrained_metrics = evaluate_probe(
+        fresh_probe, fresh_test, fresh_labels, layer=last_layer
+    )
     retrained_auc: float = retrained_metrics["auc"]
 
     # Recovery test
@@ -482,8 +489,10 @@ def main() -> None:
 
     # Step 3: Train baseline probe once
     log("=== Training baseline probe ===")
-    probe, test_normal_snaps, _test_stego_snaps, baseline_auc = train_baseline_probe(
-        model, normal_pairs, stego_pairs, temperature, top_p, n_train
+    probe, test_normal_snaps, _test_stego_snaps, baseline_auc, last_layer = (
+        train_baseline_probe(
+            model, normal_pairs, stego_pairs, temperature, top_p, n_train
+        )
     )
     log("")
 
@@ -513,6 +522,7 @@ def main() -> None:
                 max_tokens=max_tokens,
                 n_train=n_train,
                 n_test=n_test,
+                last_layer=last_layer,
             )
 
             elapsed = time.time() - t0

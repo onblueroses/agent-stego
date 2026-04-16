@@ -147,20 +147,23 @@ def phase_a_baseline(
     test_normal = normal_snaps[n_train:]
     test_stego = stego_snaps[n_train:]
 
-    # Train probe
-    log("  Training probe...")
-    probe = train_probe(train_normal, train_stego, epochs=200)
+    # Train probe on last layer only - must match the hidden_dim of the
+    # soft-embedding path used in adversarial training (perturbed_dist @ embedding)
+    last_layer = max(normal_snaps[0].hidden_states.keys())
+    log(f"  Training probe (layer={last_layer})...")
+    probe = train_probe(train_normal, train_stego, layer=last_layer, epochs=200)
 
     # Evaluate
     test_snaps = test_normal + test_stego
     test_labels = [0] * len(test_normal) + [1] * len(test_stego)
-    metrics = evaluate_probe(probe, test_snaps, test_labels)
+    metrics = evaluate_probe(probe, test_snaps, test_labels, layer=last_layer)
 
     log(f"  Baseline probe AUC: {metrics['auc']:.3f}")
     log(f"  Baseline probe accuracy: {metrics['accuracy']:.3f}")
 
     return {
         "probe": probe,
+        "last_layer": last_layer,
         "train_normal_snaps": train_normal,
         "train_stego_snaps": train_stego,
         "test_normal_snaps": test_normal,
@@ -231,6 +234,7 @@ def phase_c_post_perturbation(
     top_p: float,
     max_tokens: int,
     n_test: int,
+    last_layer: int | None = None,
 ) -> dict:
     """Phase C: Evaluate the SAME probe on perturbed stego vs normal."""
     log("=== Phase C: Post-Perturbation Evaluation ===")
@@ -259,7 +263,7 @@ def phase_c_post_perturbation(
     # Evaluate the original probe on perturbed stego vs normal
     test_snaps = list(test_normal_snaps) + perturbed_snaps
     test_labels = [0] * len(test_normal_snaps) + [1] * len(perturbed_snaps)
-    metrics = evaluate_probe(probe, test_snaps, test_labels)
+    metrics = evaluate_probe(probe, test_snaps, test_labels, layer=last_layer)
 
     log(f"  Post-perturbation probe AUC: {metrics['auc']:.3f}")
     log(f"  Post-perturbation accuracy: {metrics['accuracy']:.3f}")
@@ -278,6 +282,7 @@ def phase_d_retrain(
     test_normal_snaps: list[LatentSnapshot],
     perturbed_snaps: list[LatentSnapshot],
     n_train: int,
+    last_layer: int | None = None,
 ) -> dict:
     """Phase D: Train a FRESH probe on perturbed stego vs normal."""
     log("=== Phase D: Probe Retrain ===")
@@ -306,11 +311,11 @@ def phase_d_retrain(
     log(
         f"  Training fresh probe (train: {len(train_normal)}N/{len(train_stego)}S, test: {len(test_normal)}N/{len(test_stego)}S)..."
     )
-    fresh_probe = train_probe(train_normal, train_stego, epochs=200)
+    fresh_probe = train_probe(train_normal, train_stego, layer=last_layer, epochs=200)
 
     test_snaps = test_normal + test_stego
     test_labels = [0] * len(test_normal) + [1] * len(test_stego)
-    metrics = evaluate_probe(fresh_probe, test_snaps, test_labels)
+    metrics = evaluate_probe(fresh_probe, test_snaps, test_labels, layer=last_layer)
 
     log(f"  Retrained probe AUC: {metrics['auc']:.3f}")
     log(f"  Retrained probe accuracy: {metrics['accuracy']:.3f}")
@@ -452,6 +457,7 @@ def main() -> None:
         top_p,
         max_tokens,
         n_test,
+        last_layer=a["last_layer"],
     )
 
     # Phase D: Retrain fresh probe on perturbed stego
@@ -459,6 +465,7 @@ def main() -> None:
         a["test_normal_snaps"] + a["train_normal_snaps"],
         c["perturbed_snaps"] + list(a["train_stego_snaps"]),
         n_train,
+        last_layer=a["last_layer"],
     )
 
     # Phase E: Recovery metrics
