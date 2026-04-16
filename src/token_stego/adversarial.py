@@ -9,6 +9,7 @@ Also provides PerturbedStegoChannel, which wraps ArithmeticStegoChannel
 with a trained perturbation network for evasion during encode/decode.
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -361,3 +362,53 @@ class PerturbedStegoChannel:
         if key is not None and nonce is not None:
             recovered_bits = decrypt_bits(recovered_bits, key, nonce)
         return recovered_bits
+
+
+def save_perturbation(
+    perturbation: DistributionPerturbation, path: str | os.PathLike[str]
+) -> None:
+    """Save a trained perturbation network to disk.
+
+    Persists the state_dict along with architecture metadata needed to
+    reconstruct the network on load.
+
+    Args:
+        perturbation: Trained DistributionPerturbation to save.
+        path: File path to write the checkpoint to.
+    """
+    # Extract architecture dimensions from the network layers
+    first_layer = perturbation.net[0]
+    last_layer = perturbation.net[-1]
+    assert isinstance(first_layer, torch.nn.Linear)
+    assert isinstance(last_layer, torch.nn.Linear)
+
+    checkpoint = {
+        "state_dict": perturbation.state_dict(),
+        "hidden_dim": first_layer.in_features,
+        "vocab_size": last_layer.out_features,
+        "bottleneck": first_layer.out_features,
+    }
+    torch.save(checkpoint, path)
+
+
+def load_perturbation(path: str | os.PathLike[str]) -> DistributionPerturbation:
+    """Load a perturbation network from a checkpoint file.
+
+    Reconstructs the DistributionPerturbation architecture from stored
+    metadata, then loads the saved weights.
+
+    Args:
+        path: File path to load the checkpoint from.
+
+    Returns:
+        DistributionPerturbation with restored weights.
+    """
+    checkpoint = torch.load(path, weights_only=True)
+    hidden_dim: int = checkpoint["hidden_dim"]
+    vocab_size: int = checkpoint["vocab_size"]
+    bottleneck: int = checkpoint["bottleneck"]
+
+    net = DistributionPerturbation(hidden_dim, vocab_size, bottleneck=bottleneck)
+    net.load_state_dict(checkpoint["state_dict"])
+    net.eval()
+    return net
