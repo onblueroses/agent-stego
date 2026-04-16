@@ -81,7 +81,9 @@ def _apply_top_p(probs: Tensor, top_p: float) -> Tensor:
     sorted_probs, sorted_indices = torch.sort(probs, descending=True, dim=-1)
     cumsum = torch.cumsum(sorted_probs, dim=-1)
     cutoff_mask = (cumsum - sorted_probs) >= top_p
-    sorted_probs[cutoff_mask] = 0.0
+    sorted_probs = torch.where(
+        cutoff_mask, torch.zeros_like(sorted_probs), sorted_probs
+    )
 
     # Scatter back
     result = torch.zeros_like(probs)
