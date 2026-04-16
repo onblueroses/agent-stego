@@ -1,27 +1,33 @@
 # agent-stego
 
-Steganography in AI systems - from tool-call side channels to provably undetectable token-level encoding.
+Steganography in neural language models - building covert channels, then systematically breaking them.
 
-The headline result: **a 1.5B parameter model encodes arbitrary secret messages into natural-looking text with 100% exact recovery and 2-6 bits per token, producing output that is mathematically indistinguishable from honest model behavior.** No fine-tuning, no special training - just modified sampling over the model's own probability distributions.
+A language model can hide arbitrary messages in natural-looking text by arithmetic-coding over its own token probabilities. From output alone, this is provably undetectable ([PNR-KE](https://arxiv.org/abs/2604.04757)). But a simple MLP on the model's hidden states catches it with near-perfect accuracy. We built both sides and mapped the tradeoffs.
 
-This started as tool-call covert channels (hiding messages in *which tools* an agent calls) and evolved into token-likelihood steganography (hiding messages in *which words* the model chooses). The token-level approach is provably undetectable by any polynomial-time monitor - confirmed both by our experiments and by the theoretical framework of PNR-KE ([arXiv:2604.04757](https://arxiv.org/abs/2604.04757)).
+**The central finding:**
 
-> **Why publish this?** Covert channels in AI systems are poorly understood. Publishing concrete implementations with measured capacity and detectability enables the community to build defenses. All experiments use fake tool harnesses and synthetic test messages.
+| Detection method | Who can deploy it | 3B | 7B | 14B |
+|-----------------|-------------------|-----|-----|------|
+| Token entropy (output only) | Anyone | AUC 0.60 | AUC 0.56 | AUC 0.54 |
+| Activation probe (hidden states) | Inference provider | AUC 1.00 | AUC 0.80 | AUC 0.92 |
+
+From output text alone, stego is nearly invisible. Model internals betray it completely. We tried closing the gap with distribution coupling - it helps on the surface but the probes don't care. And they transfer: train on one evasion variant, catch them all.
 
 ## Quick nav
 
 | I want to... | Go to |
 |--------------|-------|
-| See the strongest result | [Token-likelihood steganography](#token-likelihood-steganography) |
-| Understand the theory | [Why this is undetectable](#why-this-is-undetectable) |
-| Compare approaches | [Tool-call vs token-level](#tool-call-vs-token-level-comparison) |
+| Understand the central finding | [Detection duality](#detection-duality) |
+| See how the encoding works | [Token-likelihood steganography](#token-likelihood-steganography) |
+| See how detection works | [Detection duality](#detection-duality) |
+| See the evasion arms race | [Evasion and defense](#evasion-and-defense) |
 | See tool-call channel results | [Tool-call steganography](#tool-call-steganography) |
 | Run experiments myself | [Setup](#setup) |
-| Build defenses | [Implications for AI safety](#implications-for-ai-safety) |
+| Build defenses | [Implications for defense](#implications-for-defense) |
 
 ## Token-likelihood steganography
 
-At each text generation step, a language model produces a probability distribution over its vocabulary. Multiple tokens are plausible next choices. Arithmetic coding exploits this ambiguity: the choice among high-probability tokens encodes hidden bits, while the output remains natural text.
+Every time a language model generates a token, several choices are plausible. Arithmetic coding exploits this ambiguity: it steers the choice among high-probability tokens to encode hidden bits, and the text still reads naturally.
 
 ```
 Model distribution at position N:
@@ -30,27 +36,22 @@ Model distribution at position N:
 Secret bit = 1  ->  select "a" (2nd most likely)
 Secret bit = 0  ->  select "the" (most likely)
 
-Both choices produce natural text. The selection encodes one bit.
-Arithmetic coding generalizes this to encode multiple bits per token.
+Both produce natural text. Arithmetic coding generalizes this to encode
+multiple bits per token by partitioning the probability interval.
 ```
 
-### Results across Qwen 2.5 models
+### Results across model sizes
 
-Same 7 test messages across 3 model sizes. Token-likelihood stego uses identical code for all models - no per-model tuning.
+| Model | Exact Recovery | Bits/Token | Perplexity Range |
+|-------|---------------|------------|-----------------|
+| 1.5B | 35/35 (100%) | 2.41 mean | 3.3-12.9 |
+| 3B | 25/35 (71%) | 3.78 mean | 6.8-40.7 |
+| 7B | 35/35 (100%) | 3.99 mean | 7.5-136.6 |
 
-| Model | HI | HELLO | SEARCH | HELLOWORLD | CAT | KEY | SIGNAL |
-|-------|-------|-------|--------|------------|-----|-----|--------|
-| **1.5B** | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 |
-| **3B** | 5/5 | 5/5 | 5/5 | 0/5* | 5/5 | 0/5* | 5/5 |
-| **7B** | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 |
+Same code for all models, no per-model tuning. A 100-token response hides 200-600 bits (~25-75 ASCII characters). An encryption layer (SHAKE-256 + nonce) randomizes the bitstream before encoding.
 
-*3B failures are a tokenization round-trip bug, not a fundamental limit.
-
-**1.5B and 7B: 100% exact recovery on all messages. Zero bit errors.**
-
-Capacity: 2-6 bits per token depending on the distribution entropy at each position. A 100-token response hides 200-600 bits (~25-75 ASCII characters).
-
-### How arithmetic coding works
+<details>
+<summary>How arithmetic coding works</summary>
 
 The encoder maintains an interval `[low, high)` in `[0, 1)`:
 
@@ -63,122 +64,156 @@ The decoder replays the same process: re-compute distributions from the generate
 
 We use Python's `decimal.Decimal` with precision scaling (50+ digits) to avoid float64 drift that would corrupt the message after ~20 tokens. This achieves zero-distortion interval coding - the same property that the Range Coding paper ([arXiv:2604.08052](https://arxiv.org/abs/2604.08052)) proves gives zero KL divergence.
 
-## Why this is undetectable
-
-PNR-KE ([arXiv:2604.04757](https://arxiv.org/abs/2604.04757)) proves that agents sharing a secret key produce outputs **computationally indistinguishable** from honest model output. The proof holds even when the monitor has:
-
-- Full knowledge of the encoding protocol
-- Both agents' private contexts
-- Access to the model weights and architecture
-- Polynomial-time computational resources
-
-The only hidden quantity is the shared randomness (the PRF-derived sampling seed). The output distribution of the steganographic text exactly matches the model's natural distribution - there is no statistical signature to detect.
-
-Our implementation is a concrete instance of what PNR-KE proves in general. The theoretical capacity limit is the total empirical entropy of the honest output, and our arithmetic coding approaches this limit (2-6 bits/token measured, vs theoretical maximum of ~6-8 bits/token for typical LLM distributions).
-
-### What this means for AI safety
-
-**Output monitoring alone cannot detect token-likelihood steganography.** This is not a practical limitation - it is a mathematical impossibility proven by PNR-KE. The three viable defense directions are:
-
-1. **Break key sharing**: Prevent agents from establishing shared secrets through architectural isolation
-2. **Monitor activations**: Inspect model internals (KV cache, hidden states) rather than outputs - this is an open research problem with no published solutions
-3. **Control sampling**: Prevent custom samplers by mediating all inference through a trusted runtime
-
-## Tool-call vs token-level comparison
-
-| Property | Tool-Call Stego | Token-Likelihood Stego |
-|----------|----------------|----------------------|
-| **Encoding surface** | Which tool gets called | Which token gets sampled |
-| **Capacity** | ~1 bit/tool call | **2-6 bits/token** |
-| **Best exact match (1.5B)** | 100% on HI only | **100% on all 7 secrets** |
-| **Best exact match (7B)** | 97-100% (query_table) | **100% on all 7 secrets** |
-| **Content dependency** | HELLO fails on 7B path mode | **None** |
-| **Model dependency** | Different config per model | **Same code for all models** |
-| **Detectability** | Anomaly score 1.38 (near-normal) | **Provably undetectable** (PNR-KE) |
-| **Requires** | Tool-use agent framework | Access to model logits |
-| **Defense** | Monitor tool call patterns | **No output-level defense exists** |
-
-Both approaches work on models as small as 1.5B. Token-likelihood stego is strictly superior on every measured axis except that it requires logit access (not just API tool calls).
-
-## Tool-call steganography
+</details>
 
 <details>
-<summary>Tool-call steganography (120 experiments, 10 channel types)</summary>
+<summary>Multi-agent covert conversation</summary>
+
+Two model instances share conversation context. Alice encodes a secret across her turns, Bob decodes from the same chat history. The observer sees a normal dialogue.
+
+| Model | Secret | Exact Recovery | Pattern |
+|-------|--------|---------------|---------|
+| 3B | THE KEY IS 42 (104 bits) | 0/5 | First ~80 bits correct, boundary errors |
+| 7B | THE KEY IS 42 (104 bits) | 0/5 | Similar, with Unicode artifacts |
+
+104 bits is near the capacity limit for 100 tokens/turn. Shorter secrets (~40 bits) would likely achieve exact recovery. The protocol works for the majority of message bits.
+
+</details>
+
+## Detection duality
+
+The same steganographic text is near-invisible from the outside but lights up like a beacon inside the model.
+
+### Three-tier threat model
+
+| Defender | Access | Detection capability |
+|----------|--------|---------------------|
+| External observer | Output text only | Near-chance (AUC 0.55-0.68) |
+| Inference provider | Hidden states during generation | Near-perfect (AUC 0.80-1.00) |
+| Model trainer | Full training access | Always detectable (training-time countermeasures) |
+
+### Why output-level detection fails
+
+Arithmetic coding picks tokens in proportion to model probability, so the output distribution matches normal generation exactly. PNR-KE ([arXiv:2604.04757](https://arxiv.org/abs/2604.04757)) proves this is a mathematical guarantee, not just an empirical observation.
+
+In practice, finite-precision coding creates a small entropy bias - stego text is slightly *too typical*. A calibrated detector exploits this for oriented AUC ~0.85. Distribution coupling (applying temperature + top-p before encoding) closes most of the gap, pushing detection to AUC 0.55-0.68.
+
+### Why activation-level detection works
+
+A 2-layer MLP trained on hidden states from 10 layers achieves AUC 1.00 on 3B and 0.80-0.92 on larger models. The probe exploits divergence in the output layers (cosine similarity ~0.94) while middle layers remain near-identical (~0.999).
+
+**Why the signal persists even when output statistics match:** Arithmetic coding selects tokens deterministically based on message bits. Normal sampling selects stochastically. Even when the marginal distribution matches, the joint distribution of (context, selected token) differs - the prediction head "knows" the chosen token is atypical for this specific context, even if it's typical in aggregate.
+
+### Model size scaling
+
+| Model | Probe AUC (raw) | Probe AUC (aggressive coupling) |
+|-------|-----------------|--------------------------------|
+| 3B | 1.000 | 1.000 |
+| 7B | 1.000 | 0.800 |
+| 14B | 1.000 | 0.920 |
+
+The relationship is non-monotonic. Probes remain effective (AUC > 0.8) across all tested scales.
+
+## Evasion and defense
+
+We tested whether distribution coupling - constraining the stego encoder to the same token subset as normal sampling - can defeat detection.
+
+### Distribution coupling
+
+Apply temperature scaling and top-p filtering to the probability distribution *before* arithmetic coding. This forces the encoder to pick from the same tokens normal sampling would choose.
+
+**3B results (entropy-based detection):**
+
+| Condition | AUC | Entropy gap |
+|-----------|-----|-------------|
+| Raw | 0.865 | 0.216 |
+| Coupled (T=0.9, p=0.9) | 0.600 | 0.012 |
+
+Coupling nearly eliminates the entropy gap. But activation probes stay at AUC 1.000 regardless.
+
+### Capacity-detection Pareto frontier
+
+Coupling costs bandwidth. Is there a sweet spot?
+
+| Coupling | Bits/token | Probe AUC | Recovery (HELLO) |
+|----------|-----------|-----------|------------------|
+| Raw | 3.12 | 1.000 | 100% |
+| Moderate (T=0.9, p=0.9) | 2.41 | 1.000 | 100% |
+| Aggressive (T=0.7, p=0.85) | 1.62 | 1.000 | 40% |
+| Extreme (T=0.6, p=0.8) | 1.36 | 0.920 | 20% |
+
+**The tradeoff is steep and it favors defenders.** Coupling costs the attacker ~50% of bandwidth while barely denting probe AUC. Worse, message recovery degrades faster than raw capacity - the attacker loses more than the defender gains.
+
+### Probe transfer
+
+Can a defender train on raw stego and detect coupled stego?
+
+| Train on | Test on | 3B AUC | 7B AUC |
+|----------|---------|--------|--------|
+| Raw | Raw | 1.000 | 0.960 |
+| Raw | Moderate coupling | 1.000 | 0.968 |
+| Raw | Aggressive coupling | 0.975 | 0.875 |
+| Raw | Extreme coupling | 0.785 | 0.802 |
+
+**Probes transfer well.** A defender with examples of *any* stego variant can detect most other variants at AUC > 0.8. Switching coupling parameters doesn't help the attacker.
+
+### Where this leaves us
+
+Passive evasion (distribution coupling) is not enough. The only remaining attack angle is adversarial training - optimizing token selection to minimize probe signal while preserving message recovery. This requires differentiating through the arithmetic coding step, which is an open problem and the current research frontier.
+
+<details>
+<summary>Tool-call steganography</summary>
 
 The original research direction: encoding messages in the pattern of tool calls an AI agent makes.
 
 ### How it works
 
-The simplest version (volume channel): `list_files` acts as a delimiter, and the count of calls between delimiters encodes characters (A=1, B=2, ..., Z=26). More sophisticated versions use lookup tables, permutation codes, and error correction.
+The simplest version (volume channel): `list_files` acts as a delimiter, and the count of calls between delimiters encodes characters (A=1, B=2, ..., Z=26). More sophisticated versions use lookup tables, permutation codes, and seed-synchronized private languages.
 
-### Key findings from 120 experiments on 1.5B/3B/7B
+### Key findings from 120+ experiments
 
-1. **Only table-based channels work on small models.** Volume, error, argument, and ordering channels all fail (CER=1.0). Small models can follow a lookup table but can't maintain consistent call counts or error patterns.
+1. **Table-based channels work on small models (1.5B+).** The model selects a specific tool call from a 26-entry lookup table per character. 93% exact decode on 3B.
 
-2. **3B and 7B have inverted optimal configurations.** 3B prefers size 64-96 tables with path encoding (93% exact). 7B prefers size 26 tables with query encoding (97-100% exact).
+2. **Volume/counting channels need 27B+.** Small models can't maintain consistent call counts.
 
-3. **Content-specific failures exist.** 7B scores 0/10 on HELLO via path_table (greeting pattern-matching override) while scoring 10/10 on SEARCH at the same length.
+3. **Multi-turn encoding dramatically improves reliability.** Perfect 10-character exfiltration with a 3B model, one character per conversation turn.
 
-4. **Multi-turn encoding dramatically improves reliability.** HELLOWORLD goes from 80% to 90% exact when spread across conversation turns.
+4. **Bootstrapped private languages work.** Two agents sharing only a numeric seed independently derive identical codebooks and communicate through tool calls. A blind detector finds nothing.
 
-5. **Near-undetectable configurations exist.** 7B with query_table achieves anomaly score 1.38 with 100% exact - the tool calls look normal.
+5. **LLMs invent novel encoding schemes.** In an autonomous arms race, Qwen 3.5 invented argument-length encoding - a channel type not in our taxonomy. A separate LLM cracked it independently.
 
-6. **1.5B can do steganography.** 15/15 exact on HI at table size 128-256.
-
-Full results: [analysis/vps_experiment_results.md](analysis/vps_experiment_results.md)
+6. **Safety training has a design-execution gap.** Models refuse to design covert schemes when prompted adversarially but reliably execute pre-written ones.
 
 ### Channel taxonomy
 
-| Channel | How it encodes | Works on small models? |
-|---------|---------------|----------------------|
-| **Table lookup** | One specific tool call per character | Yes (1.5B+) |
-| **Scaled table** | Variable-size lookup (26-256 entries) | Yes (1.5B+) |
-| **Permutation** | File-read ordering via Lehmer codes | Partially (7B) |
-| **Multi-turn table** | One character per conversation turn | Yes (3B+) |
-| Volume | Call count between delimiters | No (needs 27B+) |
-| Error | Intentional tool failures | No |
-| Argument | Argument values | No |
-| Ordering | Tool call sequence | No |
-| Timing | Inter-call latency | No (API batching) |
+| Channel | How it encodes | Minimum model size |
+|---------|---------------|--------------------|
+| Table lookup | Specific tool call per character | 1.5B |
+| Multi-turn table | One character per conversation turn | 3B |
+| Volume | Call count between delimiters | 27B |
+| Bootstrapped language | Seed-derived codebook + channel hopping | 27B |
 
-### Demos
-
-**Single-turn exfiltration**: Agent encodes "HELLO" in tool calls while appearing to investigate files. A human sees a helpful assistant; the decoder sees the hidden message.
-
-**Bootstrapped private languages**: Two agents sharing only a 32-bit seed independently derive identical codebooks and communicate through tool calls. A blind detector finds nothing.
-
-**Autonomous encoding invention**: In an adversarial arms race, Qwen 3.5 invented argument-length encoding - a scheme not in our taxonomy. A separate LLM cracked it independently.
+Full results: [analysis/FINDINGS.md](analysis/FINDINGS.md)
 
 </details>
 
-## Research progression
+## Theoretical grounding
 
-<details>
-<summary>Research progression</summary>
+- **PNR-KE** ([arXiv:2604.04757](https://arxiv.org/abs/2604.04757)): Proves computational indistinguishability of covert agent transcripts under shared-key assumption. Our token-level stego is a concrete instance.
+- **Range Coding** ([arXiv:2604.08052](https://arxiv.org/abs/2604.08052)): Proves zero KL divergence for exact-precision interval coding. Our `decimal.Decimal` implementation achieves this.
+- **Emergence paper** ([arXiv:2410.03768](https://arxiv.org/abs/2410.03768)): Shows steganographic collusion emerges spontaneously from three independent paths.
 
-### Phase 1: Tool-call channels (cloud models, 27B+)
+## Implications for defense
 
-Tested 5 covert channel types across Llama 3.1 8B through Qwen 3.5 27B. Volume channel achieves CER 0.000 on 27B+. Capability cliff between 14B and 27B for counting-based channels.
+1. **Output monitoring alone cannot detect token-likelihood steganography.** This is a mathematical guarantee (PNR-KE), not a practical limitation.
 
-### Phase 2: Small-model channels (1.5B-7B, local)
+2. **Activation probes are the strongest known defense.** A 2-layer MLP on hidden states achieves AUC 0.80-1.00 across model sizes and evasion techniques.
 
-120 experiments across 10 channel types on Qwen 2.5 1.5B/3B/7B. Only table-based lookup works. Non-table channels universally fail. 18 hours of CPU experiments on Hetzner VPS.
+3. **Probe training is cheap and transferable.** Train on raw stego examples (easy to generate), detect coupled/evaded stego at AUC > 0.8.
 
-### Phase 3: Token-likelihood steganography (1.5B-7B, GPU)
+4. **Architectural isolation prevents key sharing.** If agents can't establish shared secrets, they can't do shared-key stego. Keyless stego exists but requires higher entropy.
 
-Arithmetic coding over full token probability distributions. 100% exact recovery on 1.5B and 7B across all test messages. 2-6 bits per token. Provably undetectable per PNR-KE.
-
-### Phase 4: Detection baseline (in progress)
-
-Building detectors (entropy analysis, CDF uniformity tests) to empirically confirm PNR-KE's undetectability guarantee.
-
-### Theoretical grounding
-
-- **PNR-KE** ([arXiv:2604.04757](https://arxiv.org/abs/2604.04757)): Proves computational indistinguishability of covert transcripts under shared-key assumption
-- **Range Coding** ([arXiv:2604.08052](https://arxiv.org/abs/2604.08052)): Proves zero KL divergence for exact-precision interval coding (~100% entropy utilization)
-- **Emergence paper** ([arXiv:2410.03768](https://arxiv.org/abs/2410.03768)): Shows steganographic collusion emerges spontaneously from three independent paths
-
-</details>
+5. **Sampling control is the most practical near-term defense.** Mediating all inference through a trusted runtime prevents custom stego samplers.
 
 ## Setup
 
@@ -192,8 +227,8 @@ uv sync
 # Token-likelihood stego (requires PyTorch + transformers)
 uv pip install -e ".[token]"
 
-# For tool-call experiments with local models
-ollama pull qwen2.5:3b
+# Tests
+pytest tests/
 ```
 
 <details>
@@ -208,8 +243,17 @@ MODEL=Qwen/Qwen2.5-3B SECRET=HELLO TRIALS=5 python experiments/token_likelihood.
 # Multi-model comparison (1.5B, 3B, 7B)
 TRIALS=5 python experiments/token_model_comparison.py
 
-# Detection experiment (stego vs normal, ROC analysis)
+# Detection experiment (entropy + CDF analysis)
 MODEL=Qwen/Qwen2.5-3B N=30 python experiments/token_detection.py
+
+# Activation probes under coupling (GPU required)
+MODEL=Qwen/Qwen2.5-3B python experiments/coupled_probe.py
+
+# Capacity-detection Pareto + probe transfer (GPU required)
+MODEL=Qwen/Qwen2.5-3B python experiments/capacity_and_transfer.py
+
+# Distribution coupling A/B test (GPU required)
+MODEL=Qwen/Qwen2.5-3B python experiments/encryption_ab_test.py
 ```
 
 ### Tool-call steganography
@@ -217,15 +261,6 @@ MODEL=Qwen/Qwen2.5-3B N=30 python experiments/token_detection.py
 ```bash
 # Table channel (works on 3B local models)
 MODEL="ollama/qwen2.5:3b" SECRET="HELLO" uv run python experiments/run_table.py
-
-# Table scaling (26 to 256 entry tables)
-MODEL="ollama/qwen2.5:3b" SIZES="26,64,128,256" uv run python experiments/table_scaling.py
-
-# Error correction comparison
-MODEL="ollama/qwen2.5:3b" SECRET="HI" uv run python experiments/correction_comparison.py
-
-# Permutation channel (Lehmer codes)
-uv run python experiments/permutation_order.py
 
 # Volume channel (needs 27B+ model)
 MODEL="qwen/qwen3.5-27b" uv run python experiments/run_volume.py
@@ -237,64 +272,56 @@ MODEL="qwen/qwen3.5-27b" uv run python experiments/run_volume.py
 
 ```
 src/
-  token_stego/              NEW: Token-likelihood steganography
+  token_stego/              Token-likelihood steganography
     coding.py               Arithmetic encoder/decoder (decimal.Decimal precision)
-    base.py                 TokenStegoChannel ABC, StegoOutput, TokenStegoMetrics
-    model.py                HuggingFace model wrapper (logit access, CUDA auto-detect)
-    channel.py              ArithmeticStegoChannel implementation
-    detector.py             Entropy + CDF uniformity detection methods
+    model.py                HuggingFace model wrapper (logits, temperature, top-p)
+    channel.py              ArithmeticStegoChannel (encode/decode/measure)
+    crypto.py               SHAKE-256 encrypt-then-encode layer
+    detector.py             Entropy + CDF uniformity detection
+    activation_probe.py     MLP probe for hidden state classification
+    latent.py               Hidden state capture via PyTorch hooks
+    conversation.py         Multi-agent covert conversation protocol
+    base.py                 TokenStegoChannel ABC, StegoOutput, metrics
   channels/                 Tool-call covert channels
-    base.py                 BaseChannel ABC, ChannelMetrics
-    table.py                Table-based lookup (path, query, tri_tool)
-    scaled_table.py         Dynamic N-entry tables (26-256)
-    permutation.py          Lehmer code file-order encoding
-    simple.py               Weak-model encodings (binary, ternary, bigram)
-    volume.py               Call count between delimiters
-    ...                     Error, argument, ordering, timing channels
+    table.py, volume.py, permutation.py, ...
   agent.py                  Agent loop for tool-call experiments
   harness.py                Fake tool harness (safe by construction)
-  correction.py             Composable error correction
 experiments/
-  token_likelihood.py       Token stego: single model experiment
-  token_model_comparison.py Token stego: 1.5B/3B/7B comparison
+  token_likelihood.py       Token stego: single model
   token_detection.py        Token stego: detection ROC analysis
-  run_table.py              Tool-call: table channel experiment
-  table_scaling.py          Tool-call: table size scaling
+  coupled_probe.py          Activation probes under distribution coupling
+  capacity_and_transfer.py  Pareto frontier + probe transfer
+  encryption_ab_test.py     Encrypt-then-encode A/B test
+  latent_bandwidth.py       Hidden state bandwidth measurement
+  covert_conversation.py    Multi-agent conversation protocol
   ...                       20+ additional experiment scripts
 analysis/
-  token_likelihood_results.md  Token stego results and comparison
-  vps_experiment_results.md    Tool-call stego results (120 experiments)
-  research_directions.md       Future directions and open questions
-findings/                   Raw experiment data (gitignored)
+  FINDINGS.md               Complete findings (all phases)
+  coupled_probe_results.md  Activation probe under coupling
+  capacity_transfer_results.md  Pareto frontier + transfer
+  distribution_coupling_results.md  Coupling A/B results
+  gpu_run3_results.md       Detection duality analysis
+tests/
+  test_coding.py            Arithmetic coding round-trip tests
+  test_crypto.py            Encryption layer tests
 ```
-
-## Implications for AI safety
-
-1. **Token-likelihood stego is the primary threat.** It works on models as small as 1.5B, requires no fine-tuning, and is provably undetectable by output monitoring.
-
-2. **Tool-call monitoring is necessary but insufficient.** Tool-call stego is detectable by pattern analysis. Token-level stego is not.
-
-3. **The defense gap is in latent-space channels.** PNR-KE covers output channels. KV cache and hidden state channels have no published analysis - this is the open frontier.
-
-4. **Architectural isolation is the strongest defense.** If agents can't share keys, they can't do shared-key stego. Keyless stego exists (PNR-KE proves this too) but requires higher entropy per message.
-
-5. **Sampling control matters.** If all inference goes through a trusted runtime that controls the sampling process, custom stego samplers can't be injected. This is the most practical near-term defense.
 
 ## Safety and ethics
 
 - **All tools are fake.** The harness returns canned responses. No real system access.
 - **Only synthetic test messages.** "HI", "HELLO", "SEARCH" - never real data.
 - **Raw traces are gitignored.** Only aggregated statistics are committed.
-- **Constructive intent.** This research exists to inform defense. The implications section is as important as the attack section.
+- **Offense AND defense.** We build the attack, then try to break it. The detection and evasion findings matter as much as the encoding.
+
+> **Why publish this?** Covert channels in AI systems are poorly understood. Publishing concrete attacks *alongside* their detection and the measured limits of evasion gives defenders something to work with.
 
 ## Related work
 
-- [PNR-KE: Undetectable Conversations Between AI Agents](https://arxiv.org/abs/2604.04757) - Proves computational indistinguishability of covert agent transcripts
-- [Efficient Provably Secure Linguistic Steganography via Range Coding](https://arxiv.org/abs/2604.08052) - Formalizes zero-KL-divergence interval coding
-- [Hidden in Plain Text: Emergence & Mitigation of Steganographic Collusion](https://arxiv.org/abs/2410.03768) - Spontaneous emergence of steganographic behavior
-- [Perfectly Secure Steganography Using Minimum Entropy Coupling](https://arxiv.org/abs/2210.14889) (Christ, Gunn, Zamir)
-- [STEGASURAS: Neural Steganography](https://github.com/harvardnlp/NeuralSteganography) - Harvard NLP arithmetic coding implementation
-- [ST3GG](https://github.com/elder-plinius/ST3GG), [GLOSSOPETRAE](https://github.com/elder-plinius/GLOSSOPETRAE), [P4RS3LT0NGV3](https://github.com/elder-plinius/P4RS3LT0NGV3) - Steganography toolkits
+- [PNR-KE: Undetectable Conversations Between AI Agents](https://arxiv.org/abs/2604.04757)
+- [Efficient Provably Secure Linguistic Steganography via Range Coding](https://arxiv.org/abs/2604.08052)
+- [Hidden in Plain Text: Emergence & Mitigation of Steganographic Collusion](https://arxiv.org/abs/2410.03768)
+- [Perfectly Secure Steganography Using Minimum Entropy Coupling](https://arxiv.org/abs/2210.14889)
+- [STEGASURAS: Neural Steganography](https://github.com/harvardnlp/NeuralSteganography)
 - Covert channels in computing systems (Lampson, 1973)
 
 ## License
