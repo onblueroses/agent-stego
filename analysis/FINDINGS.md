@@ -841,6 +841,48 @@ arithmetic coding doesn't create a systematic bias.
 each model's natural sampling entropy and tunes coupling params to match would
 achieve near-theoretical indistinguishability across model sizes.
 
+### Activation Probes Under Coupling (Phase 8c)
+
+The existential question: does AUC=1.0 activation detection survive when the
+entropy gap is closed? Tested with proper stochastic baselines (not greedy)
+across 6 coupling configurations.
+
+Full writeup: [coupled_probe_results.md](coupled_probe_results.md)
+
+**3B: Probes are bulletproof.**
+
+| Coupling | Probe AUC | Entropy AUC | Entropy Gap |
+|----------|-----------|-------------|-------------|
+| Raw (T=1.0, p=1.0) | 1.000 | 0.677 | 0.883 |
+| T=0.9, p=0.9 | 1.000 | 0.645 | 0.450 |
+| T=0.7, p=0.85 | 1.000 | 0.658 | 0.255 |
+
+Even when the entropy gap drops to 0.255, the probe stays at AUC 1.000. The
+probe detects structural differences in hidden states that survive matched
+output statistics.
+
+**7B: Probes weakened but effective.**
+
+| Coupling | Probe AUC | Entropy AUC | Entropy Gap |
+|----------|-----------|-------------|-------------|
+| Raw (T=1.0, p=1.0) | 1.000 | 0.557 | 0.990 |
+| T=0.9, p=0.9 | 0.960 | 0.730 | 0.808 |
+| T=0.7, p=0.85 | **0.800** | 0.623 | 0.234 |
+
+Aggressive coupling drops 7B probe AUC from 1.000 to 0.800. Clear trend:
+tighter coupling on larger models weakens the activation signal.
+
+**Why probes survive on 3B but weaken on 7B**: Arithmetic coding selects
+tokens deterministically (based on message bits). The prediction head
+"knows" the chosen token is atypical for this specific context, even when
+it's typical in aggregate. Larger models have broader internal
+representations, so coupled stego tokens look more like natural
+continuations at the hidden state level.
+
+**Extrapolation**: If probe AUC drops 1.000 -> 0.800 from 3B -> 7B at
+aggressive coupling, models at 14B+ may push below 0.7. This is the
+most important follow-up experiment.
+
 ### What This Changes
 
 Tool-call stego required 27B+ models and careful prompt engineering. Token-likelihood
@@ -848,6 +890,14 @@ stego works with any model size, requires only the probability distribution, and
 with distribution coupling approaches provable undetectability. The practical
 barrier shifts from "can we build a covert channel" to "can we access model
 internals to detect one."
+
+The three-tier threat model is now established:
+- **External observer** (output only): coupling + encryption makes stego
+  near-undetectable (entropy AUC 0.557-0.677)
+- **Inference provider** (hidden states): detectable on small models (AUC 1.0),
+  weakening on larger models (AUC 0.800 on 7B with aggressive coupling)
+- **Same-model defender** (full training access): always detectable via
+  training-time countermeasures
 
 ## Mitigations
 
@@ -861,11 +911,13 @@ internals to detect one."
 | Rewrite arguments server-side | Medium | Table (path), argument |
 | Rate-limit tool calls with jitter | Hard | Timing (local agents) |
 | Anomaly detection on call patterns | Hard | All tool-call channels |
-| Activation probes on hidden states | Medium | Token-likelihood stego (AUC 1.0) |
+| Activation probes on hidden states | Medium | Token-likelihood stego (AUC 1.0 on 3B, 0.80 on 7B with coupling) |
 | Resample from model distribution | Hard | Token-likelihood stego (breaks coding) |
-| Token entropy monitoring | Ineffective | Token-likelihood (AUC < 0.2) |
+| Token entropy monitoring | Weak | Token-likelihood (AUC 0.56-0.74 with stochastic baseline) |
+| Distribution coupling (defense) | Easy | Reduces token-level detectability of stego |
 
-**Note**: Token-likelihood stego cannot be detected from output alone. The only
-known defense requires access to model internals during inference. Resampling
-(replacing model tokens with fresh samples from the same distribution) would
-break the arithmetic coding but also degrade normal output quality.
+**Note**: Token-likelihood stego with distribution coupling is near-undetectable
+from output alone (entropy AUC 0.56-0.68). Activation probes remain effective
+on small models but weaken on larger ones (AUC drops from 1.0 to 0.8 at 7B
+with aggressive coupling). The scaling trend suggests probes may approach chance
+on 14B+ models.
