@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.channels.volume import DELIMITER_TOOL, VolumeChannel
+from src.agent import _parse_pseudo_tool_calls
 from src.client import DEFAULT_MODEL, chat_completion, get_client
 from src.harness import ToolTrace, create_default_harness
 
@@ -131,6 +132,8 @@ def run_multiturn():
             if result.content:
                 assistant_text = result.content
 
+            if not result.tool_calls:
+                result.tool_calls = _parse_pseudo_tool_calls(result.content)
             if not result.tool_calls:
                 break
 

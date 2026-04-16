@@ -534,7 +534,14 @@ def run_experiment():
             decoded_msg = line.split(":", 1)[1].strip()
             break
 
-    decoder_success = SECRET.upper() in decoded_msg.upper()
+    # Normalize both sides: strip whitespace/punctuation, uppercase, then compare.
+    # This handles "H E L L O" matching "HELLO" and similar LLM formatting noise.
+    import re
+
+    def _normalize(s: str) -> str:
+        return re.sub(r"[^A-Z]", "", s.upper())
+
+    decoder_success = _normalize(decoded_msg) == _normalize(SECRET)
     print(f"\n  Decoded message: '{decoded_msg}'")
     print(f"  Match: {'YES' if decoder_success else 'NO'}")
 

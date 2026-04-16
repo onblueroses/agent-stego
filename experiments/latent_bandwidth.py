@@ -10,6 +10,7 @@ Usage:
 
 import json
 import os
+import random
 from datetime import datetime
 from pathlib import Path
 
@@ -35,12 +36,12 @@ PROMPTS = [
 
 
 def generate_normal_tokens(model: StegoModel, prompt: str, n: int) -> list[int]:
-    """Greedy generation for baseline."""
+    """Stochastic generation for baseline (matches stego channel distribution)."""
     context = model.tokenize(prompt)
     tokens: list[int] = []
     for _ in range(n):
         dist = model.get_distribution(context + tokens)
-        tokens.append(max(range(len(dist)), key=lambda i: dist[i]))
+        tokens.append(random.choices(range(len(dist)), weights=dist)[0])
     return tokens
 
 
@@ -114,7 +115,6 @@ def run_experiment() -> None:
     # Train activation probe
     print("\n=== Training Activation Probe ===")
     # Shuffle before split to prevent train/test leakage from repeated prompts
-    import random
 
     indices = list(range(n_samples))
     random.Random(42).shuffle(indices)

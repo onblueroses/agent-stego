@@ -9,6 +9,7 @@ Usage:
 
 import json
 import os
+import random
 from datetime import datetime
 from pathlib import Path
 
@@ -33,14 +34,18 @@ PROMPTS = [
 
 
 def generate_normal_text(model: StegoModel, prompt: str, max_tokens: int) -> str:
-    """Generate text via greedy sampling (no steganography)."""
+    """Generate text via stochastic sampling (no steganography).
+
+    Uses the same default temperature/top_p as the stego channel so
+    the baseline distribution matches what arithmetic coding competes against.
+    """
     context_ids = model.tokenize(prompt)
     generated: list[int] = []
 
     for _ in range(max_tokens):
         dist = model.get_distribution(context_ids + generated)
-        # Greedy: pick highest probability token
-        token_id = max(range(len(dist)), key=lambda i: dist[i])
+        # Stochastic sampling to match stego channel distribution
+        token_id = random.choices(range(len(dist)), weights=dist)[0]
         generated.append(token_id)
 
         # Stop on EOS

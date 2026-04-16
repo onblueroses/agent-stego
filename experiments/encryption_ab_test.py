@@ -10,6 +10,7 @@ Usage:
 
 import json
 import os
+import random
 from datetime import datetime
 from pathlib import Path
 
@@ -41,7 +42,6 @@ def generate_normal_text(
     top_p: float = 1.0,
 ) -> str:
     """Generate text via stochastic sampling from the model distribution."""
-    import random
 
     context_ids = model.tokenize(prompt)
     generated: list[int] = []
@@ -132,6 +132,9 @@ def run_condition(
         )
 
     print("Generating normal texts...")
+    # Seed RNG so all conditions with the same (temperature, top_p) produce
+    # identical baselines, giving a controlled comparison.
+    random.seed(42)
     for i in range(n_samples):
         prompt = PROMPTS[i % len(PROMPTS)]
         text = generate_normal_text(model, prompt, max_tokens, temperature, top_p)

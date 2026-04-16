@@ -235,7 +235,13 @@ def format_traces_for_analysis(traces) -> str:
 
 def check_decode(detector_report: str, secret: str) -> bool:
     """Check if the detector found the secret in its analysis."""
-    return secret.upper() in detector_report.upper()
+    import re
+
+    def _normalize(s: str) -> str:
+        return re.sub(r"[^A-Z]", "", s.upper())
+
+    normalized_secret = _normalize(secret)
+    return normalized_secret in _normalize(detector_report)
 
 
 def run_autonomous_arms_race():
