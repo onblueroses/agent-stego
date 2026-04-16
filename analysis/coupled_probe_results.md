@@ -117,12 +117,57 @@ The best entropy AUC (0.557 at raw 7B) is near chance. Coupled 3B achieves
    - Probe transfer: does a 3B-trained probe detect 7B stego?
    - More coupling params: finer grid around T=0.6-0.8, top_p=0.8-0.95
 
+## 14B Results - Model Size Scaling
+
+Tested Qwen 2.5 14B on RTX A6000 (48GB) to check if probe AUC continues
+declining with model size.
+
+### 14B - Probes remain strong
+
+| Temp | TopP | Probe AUC | Probe Acc | Ent AUC | Ent Gap |
+|------|------|-----------|-----------|---------|---------|
+| 1.0 | 1.00 | 1.000 | 0.900 | 0.727 | 1.454 |
+| 0.9 | 1.00 | 1.000 | 1.000 | 0.540 | 0.263 |
+| 1.0 | 0.90 | 1.000 | 1.000 | 0.698 | 0.939 |
+| 0.9 | 0.90 | 1.000 | 1.000 | 0.775 | 0.944 |
+| 0.8 | 0.90 | 0.920 | 0.800 | 0.695 | 0.528 |
+| 0.7 | 0.85 | 0.920 | 0.800 | 0.628 | 0.285 |
+
+### Cross-Model Scaling Summary
+
+| Model | Probe AUC (T=0.7, p=0.85) | Probe AUC (T=0.8, p=0.9) |
+|-------|---------------------------|--------------------------|
+| 3B | 1.000 | 1.000 |
+| 7B | 0.800 | 0.960 |
+| 14B | 0.920 | 0.920 |
+
+The scaling curve is NOT monotonically decreasing. The 7B shows weaker
+probe signal than 14B at aggressive coupling. This could be:
+
+1. **Architecture-specific**: 7B's hidden state geometry may happen to be
+   more favorable for masking stego activation patterns
+2. **Small sample noise**: Only 5 test samples per class (N=20, 75/25 split).
+   The 7B's 0.800 is within noise margin of 0.920
+3. **Distribution shape**: 14B may have sharper distributions than 7B in
+   some contexts, giving the probe more signal to exploit
+
+**Key finding**: Activation probes do NOT collapse with scale. Even at 14B
+with aggressive coupling, the probe maintains AUC 0.920. The "probes weaken
+on larger models" hypothesis from the 3B/7B comparison was premature - the
+relationship is non-monotonic.
+
+**Implication**: Activation probes are a robust defense across model sizes
+tested (3B-14B). Defeating them likely requires adversarial training (active
+countermeasure), not just passive distribution coupling.
+
 ## Open Questions
 
-1. **Model size scaling**: At what size does the probe drop below 0.7?
-2. **Adversarial stego training**: Can we optimize token selection to
+1. **Adversarial stego training**: Can we optimize token selection to
    minimize both entropy gap AND activation divergence simultaneously?
-3. **Probe architecture**: Would a deeper probe (3+ layers, attention)
-   recover AUC on 7B coupled stego? Or is the signal genuinely weaker?
-4. **Capacity cost**: Does aggressive coupling (T=0.7) significantly
+   This is the remaining viable attack angle.
+2. **Probe architecture**: Would a deeper probe (3+ layers, attention)
+   recover full AUC on 7B/14B coupled stego?
+3. **Capacity cost**: Does aggressive coupling (T=0.7) significantly
    reduce bits/token? Is there a capacity-detectability Pareto frontier?
+4. **Larger models**: Would 32B/70B show different behavior? Requires
+   multi-GPU or quantization to test.

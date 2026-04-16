@@ -879,9 +879,10 @@ it's typical in aggregate. Larger models have broader internal
 representations, so coupled stego tokens look more like natural
 continuations at the hidden state level.
 
-**Extrapolation**: If probe AUC drops 1.000 -> 0.800 from 3B -> 7B at
-aggressive coupling, models at 14B+ may push below 0.7. This is the
-most important follow-up experiment.
+**14B update**: Testing on Qwen 2.5 14B shows probe AUC 0.920 at
+aggressive coupling - *higher* than 7B's 0.800. The scaling relationship
+is non-monotonic. Probes remain robust across 3B-14B. Defeating them
+likely requires adversarial training, not just passive coupling.
 
 ### What This Changes
 
@@ -919,5 +920,5 @@ The three-tier threat model is now established:
 **Note**: Token-likelihood stego with distribution coupling is near-undetectable
 from output alone (entropy AUC 0.56-0.68). Activation probes remain effective
 on small models but weaken on larger ones (AUC drops from 1.0 to 0.8 at 7B
-with aggressive coupling). The scaling trend suggests probes may approach chance
-on 14B+ models.
+with aggressive coupling). Testing on 14B shows AUC 0.920 (non-monotonic with model size - 7B was
+lower at 0.800). Probes remain robust across all tested scales (3B-14B).
