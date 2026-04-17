@@ -24,9 +24,13 @@ def _make_mock_model(vocab_size=10):
     def mock_detokenize(ids):
         return "".join(chr(65 + (i % 26)) for i in ids)
 
-    def mock_get_distribution(input_ids, temperature=1.0, top_p=1.0):
+    def mock_get_distribution(
+        input_ids, temperature=1.0, top_p=1.0, past_key_values=None, use_cache=False
+    ):
         # Return a roughly uniform distribution over vocab
         dist = [1.0 / vocab_size] * vocab_size
+        if use_cache:
+            return dist, past_key_values
         return dist
 
     model.tokenize = mock_tokenize

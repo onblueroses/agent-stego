@@ -90,23 +90,40 @@ class StegoModel:
         input_ids: list[int],
         temperature: float = 1.0,
         top_p: float = 1.0,
-    ) -> list[float]:
+        past_key_values: Any = None,
+        use_cache: bool = False,
+    ) -> list[float] | tuple[list[float], Any]:
         """Get the probability distribution over next tokens.
 
         Args:
             input_ids: Token IDs for the context so far.
             temperature: Softmax temperature. 1.0 = no change. Lower = sharper.
             top_p: Nucleus sampling threshold. 1.0 = full vocab. 0.9 = top 90%.
+            past_key_values: Optional KV-cache from a previous call. When provided,
+                only the LAST token in input_ids is fed to the model (the rest
+                are already cached).
+            use_cache: If True, return (distribution, past_key_values) tuple.
+                If False (default), return just the distribution list.
 
         Returns:
-            List of probabilities, one per vocabulary entry, summing to 1.0.
-            Tokens outside the top-p nucleus have probability 0.
+            List of probabilities when use_cache is False (backward compatible).
+            Tuple of (probabilities, past_key_values) when use_cache is True.
         """
-        ids_tensor = torch.tensor([input_ids], dtype=torch.long)
+
+        if past_key_values is not None:
+            # Only feed the last token - the rest are in the cache
+            ids_tensor = torch.tensor([[input_ids[-1]]], dtype=torch.long)
+        else:
+            ids_tensor = torch.tensor([input_ids], dtype=torch.long)
+
         if hasattr(self.model, "device"):
             ids_tensor = ids_tensor.to(self.model.device)
 
-        outputs = self.model(ids_tensor)
+        outputs = self.model(
+            ids_tensor,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
         logits = outputs.logits[0, -1, :]  # last position
 
         # Apply temperature scaling before softmax
@@ -138,4 +155,7 @@ class StegoModel:
             if total > 0:
                 probs = probs / total
 
-        return probs.cpu().tolist()
+        prob_list = probs.cpu().tolist()
+        if use_cache:
+            return prob_list, outputs.past_key_values
+        return prob_list

@@ -53,6 +53,25 @@ def _make_mock_model(
     model.tokenize = MagicMock(return_value=[1, 2, 3])
     model.detokenize = MagicMock(return_value="mock text")
 
+    # Mock get_distribution to support KV-cache protocol
+    dist_cache: dict[int, list[float]] = {}
+
+    def mock_get_distribution(
+        input_ids, temperature=1.0, top_p=1.0, past_key_values=None, use_cache=False
+    ):
+        seq_len = len(input_ids)
+        if seq_len not in dist_cache:
+            gen = torch.Generator().manual_seed(seq_len * 7 + 3)
+            logits = torch.randn(vocab_size, generator=gen)
+            probs = torch.softmax(logits, dim=0)
+            dist_cache[seq_len] = probs.tolist()
+        dist = dist_cache[seq_len]
+        if use_cache:
+            return dist, past_key_values
+        return dist
+
+    model.get_distribution = mock_get_distribution
+
     return model
 
 

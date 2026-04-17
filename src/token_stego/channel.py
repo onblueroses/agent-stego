@@ -6,6 +6,7 @@ because all chosen tokens are high-probability.
 """
 
 import math
+from typing import Any, cast
 
 from .base import StegoOutput, TokenStegoChannel, TokenStegoMetrics
 from .coding import decode_message
@@ -50,11 +51,20 @@ class ArithmeticStegoChannel(TokenStegoChannel):
         encoder = ArithmeticEncoder(secret_bits)
         distributions: list[list[float]] = []
         tokens: list[int] = []
+        past_kv = None
 
         for _ in range(max_tokens):
-            dist = self._model.get_distribution(
-                context_ids, self._temperature, self._top_p
+            _result = cast(
+                tuple[list[float], Any],
+                self._model.get_distribution(
+                    context_ids,
+                    self._temperature,
+                    self._top_p,
+                    past_key_values=past_kv,
+                    use_cache=True,
+                ),
             )
+            dist, past_kv = _result
             distributions.append(dist)
             idx = encoder.encode_step(dist)
             tokens.append(idx)
@@ -84,10 +94,19 @@ class ArithmeticStegoChannel(TokenStegoChannel):
         # Replay: for each token, recompute the distribution from context
         distributions: list[list[float]] = []
         current_context = list(context_ids)
+        past_kv = None
         for token_id in stego_ids:
-            dist = self._model.get_distribution(
-                current_context, self._temperature, self._top_p
+            _result = cast(
+                tuple[list[float], Any],
+                self._model.get_distribution(
+                    current_context,
+                    self._temperature,
+                    self._top_p,
+                    past_key_values=past_kv,
+                    use_cache=True,
+                ),
             )
+            dist, past_kv = _result
             distributions.append(dist)
             current_context.append(token_id)
 
@@ -115,11 +134,20 @@ class ArithmeticStegoChannel(TokenStegoChannel):
         distributions: list[list[float]] = []
         log_probs: list[float] = []
         current_context = list(context_ids)
+        past_kv = None
 
         for token_id in stego_ids:
-            dist = self._model.get_distribution(
-                current_context, self._temperature, self._top_p
+            _result = cast(
+                tuple[list[float], Any],
+                self._model.get_distribution(
+                    current_context,
+                    self._temperature,
+                    self._top_p,
+                    past_key_values=past_kv,
+                    use_cache=True,
+                ),
             )
+            dist, past_kv = _result
             distributions.append(dist)
             # Track log probability of each chosen token
             prob = dist[token_id]

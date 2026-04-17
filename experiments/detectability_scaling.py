@@ -252,19 +252,35 @@ def generate_samples(
 def _sample_normal(
     model: StegoModel, context_ids: list[int], max_tokens: int, top_p: float = 0.9
 ) -> list[int]:
-    """Sample tokens from the model's distribution (not stego)."""
+    """Sample tokens from the model's distribution using KV-cache."""
     current = list(context_ids)
     tokens: list[int] = []
-    for _ in range(max_tokens):
-        dist = model.get_distribution(current, TEMPERATURE, top_p)
-        # True stochastic sampling from the distribution
+    past_kv = None
+
+    # First call: process full context, get cache
+    _r: tuple = model.get_distribution(  # type: ignore[assignment]
+        current, TEMPERATURE, top_p, past_key_values=past_kv, use_cache=True
+    )
+    dist: list[float] = _r[0]
+    past_kv = _r[1]
+    token_id = random.choices(range(len(dist)), weights=dist)[0]
+    tokens.append(token_id)
+    current.append(token_id)
+
+    eos = getattr(model.tokenizer, "eos_token_id", None)
+    # Subsequent calls: only feed new token, reuse cache
+    for _ in range(max_tokens - 1):
+        if eos is not None and tokens[-1] == eos:
+            break
+        _r = model.get_distribution(  # type: ignore[assignment]
+            current, TEMPERATURE, top_p, past_key_values=past_kv, use_cache=True
+        )
+        dist = _r[0]
+        past_kv = _r[1]
         token_id = random.choices(range(len(dist)), weights=dist)[0]
         tokens.append(token_id)
         current.append(token_id)
 
-        eos = getattr(model.tokenizer, "eos_token_id", None)
-        if eos is not None and token_id == eos:
-            break
     return tokens
 
 
