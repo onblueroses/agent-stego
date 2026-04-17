@@ -40,7 +40,7 @@ def generate_normal_tokens(model: StegoModel, prompt: str, n: int) -> list[int]:
     context = model.tokenize(prompt)
     tokens: list[int] = []
     for _ in range(n):
-        dist = model.get_distribution(context + tokens)
+        dist: list[float] = model.get_distribution(context + tokens)  # type: ignore[assignment]
         tokens.append(random.choices(range(len(dist)), weights=dist)[0])
     return tokens
 
@@ -51,17 +51,18 @@ def run_experiment() -> None:
     max_tokens = int(os.environ.get("MAX_TOKENS", "50"))
     secret = os.environ.get("SECRET", "HI")
 
-    dtype = torch.float16 if "7B" in model_name or "7b" in model_name else torch.float32
+    encryption_key = b"latent-bandwidth-key-2026"
     print(f"Model: {model_name}")
     print(f"Samples: {n_samples} normal + {n_samples} stego")
     print(f"Secret: {secret}, Max tokens: {max_tokens}")
+    print("Encryption: enabled")
     print()
 
-    model = StegoModel(model_name, dtype=dtype)
+    model = StegoModel(model_name, dtype=torch.bfloat16)
     print("Loading model...")
     model.load()
 
-    channel = ArithmeticStegoChannel(model)
+    channel = ArithmeticStegoChannel(model, key=encryption_key)
 
     normal_snaps: list[LatentSnapshot] = []
     stego_snaps: list[LatentSnapshot] = []

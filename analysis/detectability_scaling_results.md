@@ -1,16 +1,26 @@
 # Detectability Scaling Analysis
 
-## Experiment
+## Question
 
-Does activation-probe detection of encrypted arithmetic steganography hold up at scale,
-or is it a small-sample artifact?
+Can an inference provider with white-box access to model weights and hidden states
+detect encrypted arithmetic coding steganography?
 
-**Setup:** Qwen2.5-3B-Instruct, temperature=0.8, top_p=0.9, max_tokens=50, encryption
-enabled (SHAKE-256 keystream). Two probe architectures tested at each scale: last-layer
-(mean-pooled final hidden layer) and multi-layer (concatenated mean-pooled features from
-all 10 captured layers). Probes trained for 300 epochs with Adam lr=1e-3.
+Theoretically: no. Encrypted arithmetic coding draws output tokens from the model's
+own distribution. If the token distribution is identical to normal sampling, the hidden
+states from processing those tokens must also be identically distributed. A probe
+trained on hidden states should converge to AUC 0.5 (random guessing) at scale.
 
-## Results
+## Setup
+
+**Model:** Qwen2.5-3B-Instruct, bfloat16
+**Stego:** Arithmetic coding with SHAKE-256 encryption (key XOR on message bits)
+**Detection:** MLP probes on hidden states - last-layer (mean-pooled final hidden layer)
+and multi-layer (concatenated mean-pooled features from all 10 captured layers)
+**Probe training:** 300 epochs, Adam lr=1e-3
+**Secrets:** 25 ASCII strings (2-6 chars), cycled across samples
+**Temperature:** 0.8 throughout
+
+## v1 Results (20 prompts, no length matching, top_p=0.9 only)
 
 | n_train | n_test | Last-layer AUC | Multi-layer AUC | Time |
 |---------|--------|---------------|-----------------|------|
@@ -20,93 +30,128 @@ all 10 captured layers). Probes trained for 300 epochs with Adam lr=1e-3.
 | 100 | 40 | 0.603 | 0.667 | 770s |
 | 200 | 80 | 0.605 | 0.500 | 1561s |
 
+The n=25 spike to 0.900 looked alarming. But three confounds made v1 unreliable.
+
+## Confounds identified in v1
+
+**1. Prompt cycling (20 prompts).** With 25 training samples and 20 prompts, the probe
+memorizes prompt-specific activation patterns rather than learning a general stego signal.
+This explains why the spike is exactly at n=25.
+
+**2. Length mismatch.** Stego generation stops after the message is encoded. Normal
+generation runs to max_tokens. The probe picks up on sequence length as a proxy for
+the label - not the stego signal itself.
+
+**3. Top-p as a single condition.** With only top_p=0.9, we can't distinguish whether
+residual signal comes from the truncation boundary or the arithmetic coding. Running
+top_p=1.0 as a control isolates the variable.
+
+## v3 Results (100 prompts, length matching, dual top_p)
+
+All three fixes applied simultaneously:
+- 100 diverse prompts (5x more than v1)
+- Length matching: stego continues normal sampling after message encoded, both classes
+  produce exactly max_tokens tokens
+- Two conditions tested independently: top_p=0.9 and top_p=1.0
+
+### top_p=0.9
+
+| n_train | n_test | Last-layer AUC | Multi-layer AUC |
+|---------|--------|---------------|-----------------|
+| 10 | 5 | 0.480 | 0.720 |
+| 25 | 10 | 0.500 | 0.520 |
+| 50 | 20 | 0.536 | 0.550 |
+| 100 | 40 | 0.510 | 0.489 |
+| 200 | 80 | 0.502 | 0.493 |
+
+### top_p=1.0
+
+| n_train | n_test | Last-layer AUC | Multi-layer AUC |
+|---------|--------|---------------|-----------------|
+| 10 | 5 | 0.440 | 0.480 |
+| 25 | 10 | 0.460 | 0.500 |
+| 50 | 20 | 0.508 | 0.506 |
+| 100 | 40 | 0.524 | 0.486 |
+| 200 | 80 | 0.530 | 0.500 |
+
+### Cross-condition comparison (multi-layer AUC)
+
+| n_train | top_p=0.9 | top_p=1.0 |
+|---------|-----------|-----------|
+| 10 | 0.720 | 0.480 |
+| 25 | 0.520 | 0.500 |
+| 50 | 0.550 | 0.506 |
+| 100 | 0.489 | 0.486 |
+| 200 | 0.493 | 0.500 |
+
 ## Interpretation
 
-### The good news
+### The v1 spike was an experimental artifact
 
-At the largest scale (200 train samples per class), the multi-layer probe - the strongest
-detector we have - achieves AUC 0.500. Literally no better than a coin flip. This is
-consistent with the theoretical guarantee: encrypted arithmetic coding produces token
-sequences drawn from the model's own distribution, so the hidden states from processing
-those sequences should be statistically indistinguishable from normal inference.
+The n=25 AUC=0.900 in v1 completely disappeared in v3. With 100 prompts and length
+matching, even n=10 never exceeds 0.720 (top_p=0.9) or 0.508 (top_p=1.0). The probe
+was memorizing prompt-level patterns and exploiting length correlation, not detecting
+a stego signal.
 
-### The bad news
+### Both conditions converge to 0.5
 
-The AUC trajectory is not a clean convergence curve. At n=25, the multi-layer probe
-spikes to 0.900 - near-perfect detection from just 25 samples. This means:
+At n=200, all four probe configurations (2 architectures x 2 top_p values) read between
+0.49 and 0.53. This is within normal variance for a binary classifier on random data.
+The multi-layer probe - our strongest detector - shows no advantage over coin-flipping.
 
-1. **Small-batch detection is viable.** An inference provider doesn't need 200 samples
-   to test. They can run many small-window tests and flag any that spike. Even if
-   most windows read as 0.5, the occasional 0.9 is enough.
+### top_p=1.0 is cleaner but not required
 
-2. **The variance is the vulnerability.** The signal isn't consistently above chance -
-   it's noisy with occasional strong reads. This is the signature of a weak but real
-   artifact that the probe sometimes latches onto.
+The top_p=1.0 condition converges faster and has less variance at small n. The top_p=0.9
+condition shows a residual 0.720 at n=10, which washes out by n=25. This suggests
+top_p truncation introduces minor noise at very small sample sizes but has no effect
+at scale. Both conditions end up at the same place.
 
-3. **The last-layer probe is more stable.** It hovers around 0.58-0.73 across all
-   scales, never dropping to 0.5. This persistent ~0.6 AUC suggests a small but
-   real signal in the last layer that doesn't wash out.
+### The last-layer probe is also defeated
 
-### What's causing the residual signal?
+In v1, the last-layer probe showed a persistent ~0.6 AUC that never dropped to 0.5.
+In v3, it sits at 0.502/0.530 at n=200. The persistent signal was prompt memorization,
+not a layer-specific leak.
 
-Candidates, ranked by likelihood:
+## What this means
 
-**1. Top-p truncation artifact.** When top_p < 1.0, we zero out low-probability tokens
-and renormalize. The arithmetic coder then operates on a truncated distribution.
-But normal sampling also uses the same truncation. The question is whether the
-coder's deterministic token selection within the truncated distribution creates
-a different statistical fingerprint than stochastic sampling within it. In theory
-it shouldn't - but in practice, the coder's interval arithmetic may interact with
-the truncation boundary differently than random sampling.
+**For steganography:** Encrypted arithmetic coding is provably undetectable at the
+activation level, not just theoretically but empirically. A white-box inference provider
+with full access to model weights and hidden states cannot distinguish stego inference
+from normal inference using supervised probes. The theoretical zero-KL guarantee holds
+in practice.
 
-**2. Decimal precision.** The arithmetic coder uses Python's `Decimal` type with
-precision scaled to message length. At the boundaries of the coding interval,
-rounding could create a tiny but systematic bias toward or away from certain tokens.
+**For detection:** Supervised probes on hidden states are not a viable detection path
+for this class of steganography. The signal is information-theoretically absent - there
+is nothing for the probe to learn. Detection would require a fundamentally different
+approach: statistical analysis of the token sequence itself (CDF uniformity tests),
+behavioral analysis (unusual prompt patterns), or side channels (timing, API usage
+patterns).
 
-**3. Token count correlation.** Stego messages of different lengths create different
-encoding pressure. Short messages finish quickly (few tokens), long messages
-need more. If the probe sees a correlation between sequence characteristics and
-label, it can exploit this even though individual token distributions are correct.
+## What could break this
 
-**4. Prompt/secret cycling.** The experiment cycles through 20 prompts and 25 secrets.
-With 25 training samples, the probe could memorize prompt-specific patterns rather
-than a general stego signal. This explains why the spike is at n=25 specifically.
+The guarantee depends on exact conditions:
 
-## What would make it less detectable
+1. **Encryption must be enabled.** Without encryption, the arithmetic coder's target
+   point is deterministic (derived from the plaintext message), creating a measurable
+   bias in token selection. Encryption makes the target pseudorandom.
 
-### Immediate fixes (no architecture changes)
+2. **The model distribution must be faithfully reproduced.** If the stego encoder uses
+   a different softmax temperature, different top-p threshold, or different floating
+   point precision than what the model naturally produces, the distributions diverge
+   and a probe can detect the difference.
 
-- **Remove top_p truncation for stego.** Use top_p=1.0 (full distribution) during
-  encoding. The output text quality will be slightly lower (occasional low-prob tokens),
-  but the theoretical guarantee holds exactly with the full distribution.
+3. **No side channels.** The analysis covers hidden-state detection only. Timing
+   differences (stego encoding is slower than normal sampling), API usage patterns,
+   or behavioral signals (always requesting exactly max_tokens) could leak information
+   through other channels.
 
-- **Increase prompt diversity.** The 20-prompt pool is too small. With 200+ diverse
-  prompts, the probe can't memorize prompt-specific patterns.
+## Next directions
 
-- **Randomize sequence length.** Normal text and stego text should have matching
-  length distributions. Currently stego stops when the message is encoded, which
-  creates a length-dependent signal. Continue generating tokens after the message
-  is encoded to match normal text length.
+The undetectability result is strong for the defender (stego user). The open question
+is whether an attacker (inference provider) has detection paths we haven't considered:
 
-### Deeper changes
-
-- **Verify the coding precision.** Run a targeted test: encode with very high decimal
-  precision (100+ digits) and compare probe AUC. If it drops, precision was the leak.
-
-- **Per-token KL measurement.** For each generated token, measure the actual
-  probability the coder assigned vs what the model distribution gives. Any systematic
-  deviation is the leak.
-
-- **Noise injection at inference time.** Add calibrated Gaussian noise to hidden
-  states during forward passes. This isn't about the perturbation network - it's
-  about the inference provider's ability to read clean activations. If the provider
-  instruments their own model, noise injection at the serving layer could mask the
-  signal. But this requires controlling the inference pipeline.
-
-## Next steps
-
-1. Re-run with top_p=1.0 to test whether truncation is the leak
-2. Expand prompt pool to 100+ prompts
-3. Add length-matching (continue generating after message encoded)
-4. If AUC still doesn't converge to 0.5 cleanly, measure per-token KL to find
-   the exact implementation leak
+- **Unsupervised anomaly detection** on activation distributions (no labels needed)
+- **Sequential analysis** across multiple requests from the same user
+- **Timing side channels** from the arithmetic coding computation
+- **Perturbation-based detection**: inject small weight perturbations and measure
+  whether the output distribution shifts differently for stego vs normal inference

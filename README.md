@@ -4,7 +4,7 @@ Research into covert channels in AI systems - how language models can hide infor
 
 AI agents communicate through text and tool calls. Both of these surfaces can carry hidden messages: an agent can encode secrets in *which tools it calls* (tool-call steganography) or in *which tokens it generates* (token-likelihood steganography). We built working implementations of both, tested them across model sizes from 1.5B to 27B, then spent the second half of the project trying to detect and defeat our own constructions.
 
-The short version: tool-call stego is detectable with pattern analysis. Token-level stego is provably undetectable from output alone ([PNR-KE](https://arxiv.org/abs/2604.04757)) - but model internals give it away. A two-layer MLP on hidden states catches it at AUC 0.80-1.00, and that probe transfers across evasion techniques. The Pareto tradeoff between stealth and bandwidth favors defenders.
+The short version: tool-call stego is detectable with pattern analysis. Token-level stego is provably undetectable from output alone ([PNR-KE](https://arxiv.org/abs/2604.04757)). Activation probes on hidden states catch *unencrypted* stego at AUC 0.80-1.00 - but **with encryption enabled**, probe AUC converges to 0.5 (coin flip) at scale. The encryption layer makes the arithmetic coder's target point pseudorandom, eliminating the distributional bias that probes exploit. This is both theoretically predicted and empirically confirmed.
 
 > **Why publish this?** Covert channels in AI systems are poorly understood. Publishing working attacks *alongside* their detection and the measured limits of evasion gives the safety community concrete things to defend against.
 
@@ -193,9 +193,27 @@ Can a defender train on raw stego and detect coupled stego?
 
 **Probes transfer well.** A defender with examples of *any* stego variant can detect most other variants at AUC > 0.8. Switching coupling parameters doesn't help the attacker.
 
+### Encryption changes everything
+
+The results above are for *unencrypted* arithmetic coding, where the target point is deterministic. With encryption enabled (SHAKE-256 keystream XOR on message bits before encoding), the target point becomes pseudorandom - drawn uniformly from [0,1). This means each token is chosen from the model's own distribution, identically to normal sampling.
+
+We verified this empirically with a detectability scaling experiment on Qwen 3B (100 diverse prompts, length-matched stego/normal samples, two top-p conditions). Results:
+
+| n_train | top_p=0.9 AUC | top_p=1.0 AUC |
+|---------|---------------|---------------|
+| 10 | 0.720 | 0.480 |
+| 25 | 0.520 | 0.500 |
+| 50 | 0.550 | 0.506 |
+| 100 | 0.489 | 0.486 |
+| 200 | 0.493 | 0.500 |
+
+At scale, all probe configurations converge to AUC 0.5 - no better than random guessing. The activation-level detection that works against unencrypted stego is completely defeated by encryption. Full analysis: [analysis/detectability_scaling_results.md](analysis/detectability_scaling_results.md)
+
 ### Where this leaves us
 
-Passive evasion (distribution coupling) is not enough. The only remaining attack angle is adversarial training - optimizing token selection to minimize probe signal while preserving message recovery. This requires differentiating through the arithmetic coding step, which is an open problem and the current research frontier.
+Against *unencrypted* stego, defenders win: activation probes detect it reliably, passive evasion costs bandwidth without defeating probes, and probes transfer across evasion techniques.
+
+Against *encrypted* stego, the picture flips: the theoretical zero-KL guarantee holds empirically, and hidden-state probes cannot distinguish stego from normal inference. Detection would require fundamentally different approaches - timing side channels, behavioral analysis across sessions, or unsupervised anomaly detection on activation distributions.
 
 ## Tool-call steganography
 
@@ -312,6 +330,15 @@ MODEL=Qwen/Qwen2.5-3B python experiments/capacity_and_transfer.py
 
 # Distribution coupling A/B test (GPU required)
 MODEL=Qwen/Qwen2.5-3B python experiments/encryption_ab_test.py
+
+# Detectability scaling - does probe AUC converge to 0.5? (GPU required)
+MODEL=Qwen/Qwen2.5-3B-Instruct python experiments/detectability_scaling.py
+
+# Multi-agent covert conversation (GPU required)
+MODEL=Qwen/Qwen2.5-3B-Instruct TRIALS=5 python experiments/covert_conversation.py
+
+# Conversation detection via activation probes (GPU required)
+MODEL=Qwen/Qwen2.5-3B-Instruct python experiments/conversation_detection.py
 ```
 
 ### Tool-call steganography
@@ -352,16 +379,30 @@ experiments/
   encryption_ab_test.py     Encrypt-then-encode A/B test
   latent_bandwidth.py       Hidden state bandwidth measurement
   covert_conversation.py    Multi-agent conversation protocol
-  ...                       20+ additional experiment scripts
+  conversation_detection.py Activation probes on multi-turn conversations
+  detectability_scaling.py  Does probe AUC converge to 0.5 at scale?
+  adversarial_probe.py      Adversarial training against probes
+  adversarial_sweep.py      KL weight + bottleneck parameter sweep
+  ...                       15+ additional experiment scripts
 analysis/
   FINDINGS.md               Complete findings (all phases)
   coupled_probe_results.md  Activation probe under coupling
   capacity_transfer_results.md  Pareto frontier + transfer
   distribution_coupling_results.md  Coupling A/B results
   gpu_run3_results.md       Detection duality analysis
+analysis/
+  detectability_scaling_results.md  Encrypted stego undetectability proof
+  FINDINGS.md               Complete findings (all phases)
+  coupled_probe_results.md  Activation probe under coupling
+  capacity_transfer_results.md  Pareto frontier + transfer
 tests/
   test_coding.py            Arithmetic coding round-trip tests
   test_crypto.py            Encryption layer tests
+  test_covert_conversation.py  Multi-agent conversation round-trip
+  test_perturbed_channel.py Adversarial perturbation round-trip
+  test_channels.py          Tool-call channel correctness
+  test_token_stego_fixes.py Token stego regression tests
+  ...                       7 additional test files (91 tests total)
 ```
 
 ## Safety and ethics

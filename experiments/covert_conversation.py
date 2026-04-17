@@ -44,8 +44,9 @@ def run_experiment() -> None:
     print(f"Trials: {n_trials}")
     print()
 
-    dtype = torch.float16 if "7B" in model_name or "7b" in model_name else torch.float32
-    model = StegoModel(model_name, dtype=dtype)
+    use_encryption = os.environ.get("ENCRYPTION", "1") == "1"
+    key = b"covert-conversation-key-2026" if use_encryption else None
+    model = StegoModel(model_name, dtype=torch.bfloat16)
     print("Loading model...")
     t0 = time.time()
     model.load()
@@ -56,7 +57,7 @@ def run_experiment() -> None:
 
     for trial in range(1, n_trials + 1):
         topic = COVER_TOPICS[(trial - 1) % len(COVER_TOPICS)]
-        conv = CovertConversation(model, cover_topic=topic)
+        conv = CovertConversation(model, cover_topic=topic, key=key)
 
         t0 = time.time()
         result = conv.run(
