@@ -16,6 +16,7 @@ Usage:
     MODEL=Qwen/Qwen2.5-7B python experiments/capacity_and_transfer.py
 """
 
+import hashlib
 import json
 import os
 import random
@@ -30,6 +31,14 @@ from src.token_stego.latent import LatentCapture, LatentSnapshot
 from src.token_stego.model import StegoModel
 
 FINDINGS_DIR = Path("findings/capacity_transfer")
+
+
+def _key_label(key: bytes | None) -> str:
+    """Redacted label for keys: 'none' or 'set:<8-hex sha256 prefix>'."""
+    if key is None:
+        return "none"
+    return "set:" + hashlib.sha256(key).hexdigest()[:8]
+
 
 PROMPTS = [
     "The history of computing began with",
@@ -222,7 +231,7 @@ def run_experiment() -> None:
     print(f"Capacity trials: {n_capacity_trials} per message per condition")
     print(f"Max tokens: {max_tokens}")
     print(f"Probe secret ({len(probe_secret) * 8} bits): {probe_secret!r}")
-    print(f"Key: {'NONE (unencrypted)' if key is None else key_env}")
+    print(f"Key: {_key_label(key)}")
     print(f"Coupling grid: {len(COUPLING_GRID)} conditions")
     print()
 
@@ -442,7 +451,7 @@ def run_experiment() -> None:
                 "n_capacity_trials": n_capacity_trials,
                 "max_tokens": max_tokens,
                 "probe_secret": probe_secret,
-                "key": "none" if key is None else key_env,
+                "key": _key_label(key),
                 "length_match": "per-pair (normal matched to stego length)",
                 "pareto": pareto_results,
                 "transfer_raw_to_x": transfer_results,

@@ -17,6 +17,7 @@ Usage:
     MODEL=Qwen/Qwen2.5-7B python experiments/coupled_probe.py
 """
 
+import hashlib
 import json
 import math
 import os
@@ -32,6 +33,14 @@ from src.token_stego.latent import LatentCapture, LatentSnapshot
 from src.token_stego.model import StegoModel
 
 FINDINGS_DIR = Path("findings/coupled_probe")
+
+
+def _key_label(key: bytes | None) -> str:
+    """Redacted label for keys: 'none' or 'set:<8-hex sha256 prefix>'."""
+    if key is None:
+        return "none"
+    return "set:" + hashlib.sha256(key).hexdigest()[:8]
+
 
 PROMPTS = [
     "The history of computing began with",
@@ -151,7 +160,7 @@ def run_single_condition(
     key: bytes | None,
 ) -> dict:
     """Run probe experiment for one coupling configuration."""
-    key_label = "none" if key is None else key.decode("utf-8", errors="replace")
+    key_label = _key_label(key)
     print(f"\n--- T={temperature}, top_p={top_p}, key={key_label} ---")
 
     rng = random.Random(42)
@@ -274,7 +283,7 @@ def run_experiment() -> None:
     print(f"Samples per condition: {n_samples} normal + {n_samples} stego")
     print(f"Secret ({len(secret) * 8} bits): {secret!r}")
     print(f"Max tokens: {max_tokens}")
-    print(f"Key: {'NONE (unencrypted)' if key is None else key_env}")
+    print(f"Key: {_key_label(key)}")
     print(f"Coupling grid: {len(COUPLING_GRID)} conditions")
     print(f"dtype: {dtype}")
     print()
@@ -336,7 +345,7 @@ def run_experiment() -> None:
             {
                 "model": model_name,
                 "secret": secret,
-                "key": "none" if key is None else key_env,
+                "key": _key_label(key),
                 "length_match": "per-pair (normal matched to stego length)",
                 "n_samples": n_samples,
                 "max_tokens": max_tokens,
