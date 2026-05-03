@@ -1,5 +1,13 @@
 # Capacity-Detection Pareto Frontier & Probe Transfer
 
+> **SUPERSEDED (2026-05-02).** Same length-matching issue as the coupled-probe
+> run. The probe-transfer numbers in particular reverse direction under the
+> rerun: a probe trained on raw sampling does **not** transfer to aggressive
+> coupling (AUC ~0.48-0.55, near chance), where this run reported AUC > 0.8.
+> The corrected numbers and the cross-condition transfer matrix are in
+> [rerun_2026-05-02_lengthmatch.md](rerun_2026-05-02_lengthmatch.md). Capacity
+> rank-ordering (raw > moderate > aggressive ≈ 1 bpt) holds. Kept for provenance.
+
 **Date**: 2026-04-16
 **Instance**: Vast.ai RTX 4090 ($0.315/hr), instance 35074840
 **Models**: Qwen 2.5 3B, 7B

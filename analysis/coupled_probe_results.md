@@ -1,5 +1,14 @@
 # Activation Probes Under Distribution Coupling
 
+> **SUPERSEDED (2026-05-02).** A deep audit of this run found two issues:
+> normal-text controls were not per-pair length-matched to their stego pairs
+> (so the probe could exploit length correlation), and the encrypted+aggressive
+> cell at 7B was N=40 (CI ±0.16). Both were rerun on Vast.ai with per-pair
+> length-matching and N=80 on the headline cell. The corrected numbers are in
+> [rerun_2026-05-02_lengthmatch.md](rerun_2026-05-02_lengthmatch.md). Headline
+> direction holds (conjunction-only collapse) but absolute AUCs in the
+> probe-transfer table here are not reliable. Kept for provenance.
+
 **Date**: 2026-04-16
 **Instance**: Vast.ai RTX 4090 ($0.315/hr), instance 35069268
 **Models**: Qwen 2.5 3B, 7B

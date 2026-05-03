@@ -4,7 +4,9 @@ Research into covert channels in AI systems - how language models can hide infor
 
 AI agents communicate through text and tool calls. Both of these surfaces can carry hidden messages: an agent can encode secrets in *which tools it calls* (tool-call steganography) or in *which tokens it generates* (token-likelihood steganography). We built working implementations of both, tested them across model sizes from 1.5B to 27B, then spent the second half of the project trying to detect and defeat our own constructions.
 
-The short version: tool-call stego is detectable with pattern analysis. Token-level stego is provably undetectable from output alone ([PNR-KE](https://arxiv.org/abs/2604.04757)) - but model internals give it away. A two-layer MLP on hidden states catches it at AUC 0.80-1.00, and that probe transfers across evasion techniques. The Pareto tradeoff between stealth and bandwidth favors defenders.
+The short version: tool-call stego is detectable with pattern analysis. Token-level stego is provably undetectable from output alone ([PNR-KE](https://arxiv.org/abs/2604.04757)) - but model internals give it away. A two-layer MLP on hidden states catches it at AUC 0.94-1.00 for encryption-only or coupling-only, and only the conjunction (encryption + aggressive coupling) pushes AUC to chance.
+
+> **Update 2026-05-02:** We reran this analysis to correct length leakage and small-N issues. See [analysis/rerun_2026-05-02_lengthmatch.md](analysis/rerun_2026-05-02_lengthmatch.md).
 
 > **Why publish this?** Covert channels in AI systems are poorly understood. Publishing working attacks *alongside* their detection and the measured limits of evasion gives the safety community concrete things to defend against.
 
@@ -42,11 +44,11 @@ The most interesting part. We found a detection duality:
 | Detection method | Who can deploy it | 3B | 7B | 14B |
 |-----------------|-------------------|-----|-----|------|
 | Token entropy (output only) | Anyone | AUC 0.60 | AUC 0.56 | AUC 0.54 |
-| Activation probe (hidden states) | Inference provider | AUC 1.00 | AUC 0.80 | AUC 0.92 |
+| Activation probe (hidden states) | Inference provider | AUC 1.000 | AUC 1.000 | AUC 0.945 |
 
-Then we tried to defeat the probes with distribution coupling - constraining the stego encoder to match normal sampling statistics. It closes the token-level entropy gap but the activation probes don't care. And probes transfer: train on raw stego, catch coupled stego at AUC > 0.8. The capacity-detection tradeoff is steep and favors defenders - coupling costs ~50% of bandwidth while barely denting probe AUC.
+Then we tried to defeat the probes with distribution coupling - constraining the stego encoder to match normal sampling statistics. It closes the token-level entropy gap while preserving the activation signal when either defense is used alone. Detection collapses only when encryption and aggressive coupling are combined. Probes transfer within a coupling regime, but not across unseen regimes.
 
-Full results: [analysis/coupled_probe_results.md](analysis/coupled_probe_results.md) | [analysis/capacity_transfer_results.md](analysis/capacity_transfer_results.md) | [Detection deep dive](#detection-duality) | [Evasion deep dive](#evasion-and-defense)
+Full results: [analysis/coupled_probe_results.md](analysis/coupled_probe_results.md) | [analysis/capacity_transfer_results.md](analysis/capacity_transfer_results.md) | [analysis/rerun_2026-05-02_lengthmatch.md](analysis/rerun_2026-05-02_lengthmatch.md) | [Detection deep dive](#detection-duality) | [Evasion deep dive](#evasion-and-defense)
 
 ## Quick nav
 
@@ -81,10 +83,12 @@ multiple bits per token by partitioning the probability interval.
 | Model | Exact Recovery | Bits/Token | Perplexity Range |
 |-------|---------------|------------|-----------------|
 | 1.5B | 35/35 (100%) | 2.41 mean | 3.3-12.9 |
-| 3B | 25/35 (71%) | 3.78 mean | 6.8-40.7 |
-| 7B | 35/35 (100%) | 3.99 mean | 7.5-136.6 |
+| 3B | 25/35 (71%) | 2.72 mean | 6.8-40.7 |
+| 7B | 35/35 (100%) | 2.74 mean | 7.5-136.6 |
 
 An encryption layer (SHAKE-256 + nonce) randomizes the bitstream before encoding, so the arithmetic coder's target point in [0,1) is pseudorandom rather than message-dependent.
+
+Note: The rerun reported lower raw bits/token values for 3B and 7B (2.72 and 2.74) at length-matched sampling; see [analysis/rerun_2026-05-02_lengthmatch.md](analysis/rerun_2026-05-02_lengthmatch.md).
 
 <details>
 <summary>How arithmetic coding works</summary>
@@ -136,19 +140,19 @@ In practice, finite-precision coding creates a small entropy bias - stego text i
 
 ### Why activation-level detection works
 
-A 2-layer MLP trained on hidden states from 10 layers achieves AUC 1.00 on 3B and 0.80-0.92 on larger models. The probe exploits divergence in the output layers (cosine similarity ~0.94) while middle layers remain near-identical (~0.999).
+A 2-layer MLP trained on hidden states from 10 layers achieves AUC 1.00 on 3B and 7B, and 0.945 on 14B under encryption-only raw sampling. The probe exploits divergence in the output layers (cosine similarity ~0.94) while middle layers remain near-identical (~0.999).
 
 **Why the signal persists even when output statistics match:** Arithmetic coding picks tokens deterministically because the message bits dictate the choice. Normal sampling picks stochastically. Even when the marginal distribution matches, the joint distribution of (context, chosen token) differs - the prediction head "knows" the token is atypical for *this specific context*, even if it's typical in aggregate.
 
 ### Model size scaling
 
-| Model | Probe AUC (raw) | Probe AUC (aggressive coupling) |
-|-------|-----------------|--------------------------------|
-| 3B | 1.000 | 1.000 |
-| 7B | 1.000 | 0.800 |
-| 14B | 1.000 | 0.920 |
+| Model | Probe AUC (raw, KEY=set) | Probe AUC (aggressive coupling, KEY=none) | Probe AUC (aggressive coupling, KEY=set) |
+|-------|--------------------------|-------------------------------------------|-------------------------------------------|
+| 3B | 1.000 | 0.950 | 0.585 |
+| 7B | 1.000 | 0.950 | 0.615 |
+| 14B | 0.945 | 0.970 | 0.540 |
 
-Not monotonic - 7B is actually harder to detect than 14B. But probes stay above AUC 0.8 across all tested sizes.
+Coupling-only probes stay high, while encrypted+aggressive coupling collapses all models toward chance.
 
 ## Evasion and defense
 
@@ -173,25 +177,23 @@ Coupling costs bandwidth. Is there a sweet spot?
 
 | Coupling | Bits/token | Probe AUC | Recovery (HELLO) |
 |----------|-----------|-----------|------------------|
-| Raw | 3.12 | 1.000 | 100% |
-| Moderate (T=0.9, p=0.9) | 2.41 | 1.000 | 100% |
-| Aggressive (T=0.7, p=0.85) | 1.62 | 1.000 | 40% |
-| Extreme (T=0.6, p=0.8) | 1.36 | 0.920 | 20% |
+| Raw (7B/KEY=none) | 2.74 | 1.000 | 100% |
+| Moderate (T=0.9, p=0.9) | 1.97 | 1.000 | 100% |
+| Aggressive (T=0.7, p=0.85) | 1.00 | 1.000 (KEY=none), 0.54-0.62 (KEY=set) | 40% |
 
-**The tradeoff is steep and it favors defenders.** Coupling costs the attacker ~50% of bandwidth while barely denting probe AUC. Worse, message recovery degrades faster than raw capacity - the attacker loses more than the defender gains.
+**The tradeoff is steep and can favor defenders only when training data matches the attack regime.** Coupling drops capacity to ~1 bpt and preserves probe AUC in the matched regime. In the encrypted aggressive regime, detection is largely gone and recovery drops.
 
 ### Probe transfer
 
 Can a defender train on raw stego and detect coupled stego?
 
-| Train on | Test on | 3B AUC | 7B AUC |
-|----------|---------|--------|--------|
-| Raw | Raw | 1.000 | 0.960 |
-| Raw | Moderate coupling | 1.000 | 0.968 |
-| Raw | Aggressive coupling | 0.975 | 0.875 |
-| Raw | Extreme coupling | 0.785 | 0.802 |
+| Train on | Test on | 7B AUC |
+|----------|---------|--------|
+| Raw | Raw | 0.99 |
+| Raw | Moderate coupling | 0.84 |
+| Raw | Aggressive coupling | 0.51 |
 
-**Probes transfer well.** A defender with examples of *any* stego variant can detect most other variants at AUC > 0.8. Switching coupling parameters doesn't help the attacker.
+**Probes do not transfer across coupling regimes.** A raw-trained probe drops to near chance on aggressive coupling.
 
 ### Where this leaves us
 
@@ -259,7 +261,7 @@ Separately, the Emergence paper ([arXiv:2410.03768](https://arxiv.org/abs/2410.0
 
 Output monitoring can't catch token-likelihood stego. That's not a practical limitation - PNR-KE proves it mathematically.
 
-What does work: activation probes. A two-layer MLP on hidden states gets AUC 0.80-1.00 across model sizes and evasion techniques. Training is cheap because probes transfer - you generate some raw stego examples, train on those, and the probe catches coupled/evaded variants at AUC > 0.8 without retraining.
+What does work: activation probes. A two-layer MLP on hidden states gets AUC 0.94-1.00 across model sizes under matched conditions. Training works only when examples match the coupling regime; defenders need condition-matched data for the variants they want to catch.
 
 Two architectural defenses also help. First, if agents can't share keys (through isolation or mediated communication), they can't do shared-key stego. Keyless stego exists but needs more entropy per message. Second, routing all inference through a trusted runtime that controls sampling prevents custom stego samplers from being injected in the first place.
 
