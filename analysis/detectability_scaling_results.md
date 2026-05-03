@@ -1,5 +1,17 @@
 # Detectability Scaling Analysis
 
+> **SUPERSEDED (2026-05-02).** This run reported probe AUC converging to 0.5
+> at n_train=200 under encryption, supporting an "encryption alone defeats
+> activation probes" claim. A length-matching audit traced the result to
+> length leakage in the controls: stego and normal samples were not per-pair
+> length-matched, so the probe was learning trace length, not steganography.
+> The rerun with per-pair length-matching shows encryption alone leaves probe
+> AUC at 0.94-1.00 across 3B/7B/14B; only the conjunction of encryption and
+> aggressive coupling collapses AUC to chance. Corrected numbers in
+> [rerun_2026-05-02_lengthmatch.md](rerun_2026-05-02_lengthmatch.md). Kept for
+> provenance and as a worked example of why per-pair length-matching is
+> load-bearing in this evaluation.
+
 ## Question
 
 Can an inference provider with white-box access to model weights and hidden states

@@ -4,7 +4,9 @@ Research into covert channels in AI systems - how language models can hide infor
 
 AI agents communicate through text and tool calls. Both of these surfaces can carry hidden messages: an agent can encode secrets in *which tools it calls* (tool-call steganography) or in *which tokens it generates* (token-likelihood steganography). We built working implementations of both, tested them across model sizes from 1.5B to 27B, then spent the second half of the project trying to detect and defeat our own constructions.
 
-The short version: tool-call stego is detectable with pattern analysis. Token-level stego is provably undetectable from output alone ([PNR-KE](https://arxiv.org/abs/2604.04757)). Activation probes on hidden states catch *unencrypted* stego at AUC 0.80-1.00 - but **with encryption enabled**, probe AUC converges to 0.5 (coin flip) at scale. The encryption layer makes the arithmetic coder's target point pseudorandom, eliminating the distributional bias that probes exploit. This is both theoretically predicted and empirically confirmed.
+The short version: tool-call stego is detectable with pattern analysis. Token-level stego is provably undetectable from output alone ([PNR-KE](https://arxiv.org/abs/2604.04757)) - but model internals give it away. A two-layer MLP on hidden states catches it at AUC 0.94-1.00 for encryption-only or coupling-only, and only the conjunction (encryption + aggressive coupling) pushes AUC to chance.
+
+> **Update 2026-05-02:** A length-matching audit overturned the earlier "encryption alone defeats probes, AUC -> 0.5" finding. With per-pair length-matched controls, encryption alone leaves probe AUC at 0.94-1.00 across 3B/7B/14B; only the conjunction of encryption and aggressive coupling collapses detection to chance. See [analysis/rerun_2026-05-02_lengthmatch.md](analysis/rerun_2026-05-02_lengthmatch.md).
 
 > **Why publish this?** Covert channels in AI systems are poorly understood. Publishing working attacks *alongside* their detection and the measured limits of evasion gives the safety community concrete things to defend against.
 
@@ -42,11 +44,11 @@ The most interesting part. We found a detection duality:
 | Detection method | Who can deploy it | 3B | 7B | 14B |
 |-----------------|-------------------|-----|-----|------|
 | Token entropy (output only) | Anyone | AUC 0.60 | AUC 0.56 | AUC 0.54 |
-| Activation probe (hidden states) | Inference provider | AUC 1.00 | AUC 0.80 | AUC 0.92 |
+| Activation probe (hidden states) | Inference provider | AUC 1.000 | AUC 1.000 | AUC 0.945 |
 
-Then we tried to defeat the probes with distribution coupling - constraining the stego encoder to match normal sampling statistics. It closes the token-level entropy gap but the activation probes don't care. And probes transfer: train on raw stego, catch coupled stego at AUC > 0.8. The capacity-detection tradeoff is steep and favors defenders - coupling costs ~50% of bandwidth while barely denting probe AUC.
+Then we tried to defeat the probes with distribution coupling - constraining the stego encoder to match normal sampling statistics. It closes the token-level entropy gap while preserving the activation signal when either defense is used alone. Detection collapses only when encryption and aggressive coupling are combined. Probes transfer within a coupling regime, but not across unseen regimes.
 
-Full results: [analysis/coupled_probe_results.md](analysis/coupled_probe_results.md) | [analysis/capacity_transfer_results.md](analysis/capacity_transfer_results.md) | [Detection deep dive](#detection-duality) | [Evasion deep dive](#evasion-and-defense)
+Full results: [analysis/coupled_probe_results.md](analysis/coupled_probe_results.md) | [analysis/capacity_transfer_results.md](analysis/capacity_transfer_results.md) | [analysis/rerun_2026-05-02_lengthmatch.md](analysis/rerun_2026-05-02_lengthmatch.md) | [Detection deep dive](#detection-duality) | [Evasion deep dive](#evasion-and-defense)
 
 ## Quick nav
 
@@ -81,10 +83,12 @@ multiple bits per token by partitioning the probability interval.
 | Model | Exact Recovery | Bits/Token | Perplexity Range |
 |-------|---------------|------------|-----------------|
 | 1.5B | 35/35 (100%) | 2.41 mean | 3.3-12.9 |
-| 3B | 25/35 (71%) | 3.78 mean | 6.8-40.7 |
-| 7B | 35/35 (100%) | 3.99 mean | 7.5-136.6 |
+| 3B | 25/35 (71%) | 2.72 mean | 6.8-40.7 |
+| 7B | 35/35 (100%) | 2.74 mean | 7.5-136.6 |
 
 An encryption layer (SHAKE-256 + nonce) randomizes the bitstream before encoding, so the arithmetic coder's target point in [0,1) is pseudorandom rather than message-dependent.
+
+Note: The rerun reported lower raw bits/token values for 3B and 7B (2.72 and 2.74) at length-matched sampling; see [analysis/rerun_2026-05-02_lengthmatch.md](analysis/rerun_2026-05-02_lengthmatch.md).
 
 <details>
 <summary>How arithmetic coding works</summary>
@@ -136,19 +140,19 @@ In practice, finite-precision coding creates a small entropy bias - stego text i
 
 ### Why activation-level detection works
 
-A 2-layer MLP trained on hidden states from 10 layers achieves AUC 1.00 on 3B and 0.80-0.92 on larger models. The probe exploits divergence in the output layers (cosine similarity ~0.94) while middle layers remain near-identical (~0.999).
+A 2-layer MLP trained on hidden states from 10 layers achieves AUC 1.00 on 3B and 7B, and 0.945 on 14B under encryption-only raw sampling. The probe exploits divergence in the output layers (cosine similarity ~0.94) while middle layers remain near-identical (~0.999).
 
 **Why the signal persists even when output statistics match:** Arithmetic coding picks tokens deterministically because the message bits dictate the choice. Normal sampling picks stochastically. Even when the marginal distribution matches, the joint distribution of (context, chosen token) differs - the prediction head "knows" the token is atypical for *this specific context*, even if it's typical in aggregate.
 
 ### Model size scaling
 
-| Model | Probe AUC (raw) | Probe AUC (aggressive coupling) |
-|-------|-----------------|--------------------------------|
-| 3B | 1.000 | 1.000 |
-| 7B | 1.000 | 0.800 |
-| 14B | 1.000 | 0.920 |
+| Model | Probe AUC (raw, KEY=set) | Probe AUC (aggressive coupling, KEY=none) | Probe AUC (aggressive coupling, KEY=set) |
+|-------|--------------------------|-------------------------------------------|-------------------------------------------|
+| 3B | 1.000 | 0.950 | 0.585 |
+| 7B | 1.000 | 0.950 | 0.615 |
+| 14B | 0.945 | 0.970 | 0.540 |
 
-Not monotonic - 7B is actually harder to detect than 14B. But probes stay above AUC 0.8 across all tested sizes.
+Coupling-only probes stay high, while encrypted+aggressive coupling collapses all models toward chance.
 
 ## Evasion and defense
 
@@ -173,47 +177,35 @@ Coupling costs bandwidth. Is there a sweet spot?
 
 | Coupling | Bits/token | Probe AUC | Recovery (HELLO) |
 |----------|-----------|-----------|------------------|
-| Raw | 3.12 | 1.000 | 100% |
-| Moderate (T=0.9, p=0.9) | 2.41 | 1.000 | 100% |
-| Aggressive (T=0.7, p=0.85) | 1.62 | 1.000 | 40% |
-| Extreme (T=0.6, p=0.8) | 1.36 | 0.920 | 20% |
+| Raw (7B/KEY=none) | 2.74 | 1.000 | 100% |
+| Moderate (T=0.9, p=0.9) | 1.97 | 1.000 | 100% |
+| Aggressive (T=0.7, p=0.85) | 1.00 | 1.000 (KEY=none), 0.54-0.62 (KEY=set) | 40% |
 
-**The tradeoff is steep and it favors defenders.** Coupling costs the attacker ~50% of bandwidth while barely denting probe AUC. Worse, message recovery degrades faster than raw capacity - the attacker loses more than the defender gains.
+**The tradeoff is steep and can favor defenders only when training data matches the attack regime.** Coupling drops capacity to ~1 bpt and preserves probe AUC in the matched regime. In the encrypted aggressive regime, detection is largely gone and recovery drops.
 
 ### Probe transfer
 
 Can a defender train on raw stego and detect coupled stego?
 
-| Train on | Test on | 3B AUC | 7B AUC |
-|----------|---------|--------|--------|
-| Raw | Raw | 1.000 | 0.960 |
-| Raw | Moderate coupling | 1.000 | 0.968 |
-| Raw | Aggressive coupling | 0.975 | 0.875 |
-| Raw | Extreme coupling | 0.785 | 0.802 |
+| Train on | Test on | 7B AUC |
+|----------|---------|--------|
+| Raw | Raw | 0.99 |
+| Raw | Moderate coupling | 0.84 |
+| Raw | Aggressive coupling | 0.51 |
 
-**Probes transfer well.** A defender with examples of *any* stego variant can detect most other variants at AUC > 0.8. Switching coupling parameters doesn't help the attacker.
+**Probes do not transfer across coupling regimes.** A raw-trained probe drops to near chance on aggressive coupling.
 
-### Encryption changes everything
+### Encryption alone is not enough
 
-The results above are for *unencrypted* arithmetic coding, where the target point is deterministic. With encryption enabled (SHAKE-256 keystream XOR on message bits before encoding), the target point becomes pseudorandom - drawn uniformly from [0,1). This means each token is chosen from the model's own distribution, identically to normal sampling.
+An earlier scaling experiment ([analysis/detectability_scaling_results.md](analysis/detectability_scaling_results.md)) reported probe AUC converging to 0.5 under encryption at n_train=200. The 2026-05-02 audit traced that result to length leakage in the controls: stego and normal samples were not per-pair length-matched, so the probe was learning trace length rather than steganography, and the encryption layer (which slightly shifts length distribution) made the apparent AUC drift toward chance.
 
-We verified this empirically with a detectability scaling experiment on Qwen 3B (100 diverse prompts, length-matched stego/normal samples, two top-p conditions). Results:
-
-| n_train | top_p=0.9 AUC | top_p=1.0 AUC |
-|---------|---------------|---------------|
-| 10 | 0.720 | 0.480 |
-| 25 | 0.520 | 0.500 |
-| 50 | 0.550 | 0.506 |
-| 100 | 0.489 | 0.486 |
-| 200 | 0.493 | 0.500 |
-
-At scale, all probe configurations converge to AUC 0.5 - no better than random guessing. The activation-level detection that works against unencrypted stego is completely defeated by encryption. Full analysis: [analysis/detectability_scaling_results.md](analysis/detectability_scaling_results.md)
+With per-pair length-matched controls, encryption alone leaves probe AUC at 0.94-1.00 across 3B/7B/14B. Encryption removes the entropy-bias signal at the output layer but leaves the activation signature intact. Only the conjunction of encryption *and* aggressive coupling (T=0.7, p=0.85) drops AUC to 0.54-0.62 across all three model sizes - and that conjunction also caps the channel at ~1 bit/token. Full numbers: [analysis/rerun_2026-05-02_lengthmatch.md](analysis/rerun_2026-05-02_lengthmatch.md).
 
 ### Where this leaves us
 
-Against *unencrypted* stego, defenders win: activation probes detect it reliably, passive evasion costs bandwidth without defeating probes, and probes transfer across evasion techniques.
+Single-defense evasion (encryption-only or coupling-only) does not defeat activation probes. The conjunction does, but at the cost of capacity and exact recovery. Probes also do not transfer across coupling regimes, so defenders need condition-matched training data per regime they want to detect.
 
-Against *encrypted* stego, the picture flips: the theoretical zero-KL guarantee holds empirically, and hidden-state probes cannot distinguish stego from normal inference. Detection would require fundamentally different approaches - timing side channels, behavioral analysis across sessions, or unsupervised anomaly detection on activation distributions.
+The remaining attacker frontier is adversarial training - optimizing token selection to minimize probe signal while preserving message recovery. This requires differentiating through the arithmetic coding step, which is an open problem.
 
 ## Tool-call steganography
 
@@ -277,7 +269,7 @@ Separately, the Emergence paper ([arXiv:2410.03768](https://arxiv.org/abs/2410.0
 
 Output monitoring can't catch token-likelihood stego. That's not a practical limitation - PNR-KE proves it mathematically.
 
-What does work: activation probes. A two-layer MLP on hidden states gets AUC 0.80-1.00 across model sizes and evasion techniques. Training is cheap because probes transfer - you generate some raw stego examples, train on those, and the probe catches coupled/evaded variants at AUC > 0.8 without retraining.
+What does work: activation probes. A two-layer MLP on hidden states gets AUC 0.94-1.00 across model sizes under matched conditions. Training works only when examples match the coupling regime; defenders need condition-matched data for the variants they want to catch.
 
 Two architectural defenses also help. First, if agents can't share keys (through isolation or mediated communication), they can't do shared-key stego. Keyless stego exists but needs more entropy per message. Second, routing all inference through a trusted runtime that controls sampling prevents custom stego samplers from being injected in the first place.
 
@@ -385,16 +377,13 @@ experiments/
   adversarial_sweep.py      KL weight + bottleneck parameter sweep
   ...                       15+ additional experiment scripts
 analysis/
-  FINDINGS.md               Complete findings (all phases)
-  coupled_probe_results.md  Activation probe under coupling
-  capacity_transfer_results.md  Pareto frontier + transfer
+  FINDINGS.md                       Complete findings (all phases)
+  rerun_2026-05-02_lengthmatch.md   Length-matched rerun (authoritative)
+  coupled_probe_results.md          Activation probe under coupling (superseded)
+  capacity_transfer_results.md      Pareto frontier + transfer (superseded)
+  detectability_scaling_results.md  Earlier scaling result (superseded by rerun)
   distribution_coupling_results.md  Coupling A/B results
-  gpu_run3_results.md       Detection duality analysis
-analysis/
-  detectability_scaling_results.md  Encrypted stego undetectability proof
-  FINDINGS.md               Complete findings (all phases)
-  coupled_probe_results.md  Activation probe under coupling
-  capacity_transfer_results.md  Pareto frontier + transfer
+  gpu_run3_results.md               Detection duality analysis
 tests/
   test_coding.py            Arithmetic coding round-trip tests
   test_crypto.py            Encryption layer tests
