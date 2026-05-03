@@ -59,13 +59,12 @@ SECRETS = [
     "THE KEY IS 42",  # 104 bits
 ]
 
+# Trimmed from 6 to 3 conditions for compute budget (matches coupled_probe.py).
+# Pareto endpoints + middle: raw baseline, moderate combined, aggressive.
 COUPLING_GRID = [
     {"temperature": 1.0, "top_p": 1.0, "label": "raw"},
-    {"temperature": 0.9, "top_p": 0.95, "label": "light"},
     {"temperature": 0.9, "top_p": 0.9, "label": "moderate"},
-    {"temperature": 0.8, "top_p": 0.9, "label": "tight"},
     {"temperature": 0.7, "top_p": 0.85, "label": "aggressive"},
-    {"temperature": 0.6, "top_p": 0.8, "label": "extreme"},
 ]
 
 

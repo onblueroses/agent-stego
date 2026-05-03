@@ -54,13 +54,12 @@ PROMPTS = [
     "Space exploration missions have revealed",
 ]
 
-# Grid of coupling parameters to sweep
+# Grid of coupling parameters to sweep.
+# Trimmed from 6 to 3 conditions for compute budget; covers raw baseline,
+# moderate combined coupling, and aggressive coupling (Pareto endpoints + middle).
 COUPLING_GRID = [
     {"temperature": 1.0, "top_p": 1.0},  # Raw (no coupling) - baseline
-    {"temperature": 0.9, "top_p": 1.0},  # Temperature only
-    {"temperature": 1.0, "top_p": 0.9},  # Top-p only
-    {"temperature": 0.9, "top_p": 0.9},  # Both (the combo that worked in Phase 8b)
-    {"temperature": 0.8, "top_p": 0.9},  # Tighter temperature
+    {"temperature": 0.9, "top_p": 0.9},  # Moderate combined coupling
     {"temperature": 0.7, "top_p": 0.85},  # Aggressive coupling
 ]
 
@@ -273,6 +272,15 @@ def run_experiment() -> None:
     key: bytes | None = (
         None if key_env.lower() in ("", "none", "off") else key_env.encode("utf-8")
     )
+    # Optional coupling-cell filter: comma-separated "T,p" pairs. Empty = full grid.
+    # e.g. COUPLING_FILTER="0.7,0.85" runs only the aggressive cell.
+    filt = os.environ.get("COUPLING_FILTER", "").strip()
+    grid: list[dict[str, float]] = list(COUPLING_GRID)
+    if filt:
+        wanted = {tuple(float(x) for x in pair.split(",")) for pair in filt.split(";")}
+        grid = [g for g in COUPLING_GRID if (g["temperature"], g["top_p"]) in wanted]
+        if not grid:
+            raise SystemExit(f"COUPLING_FILTER={filt!r} matched no grid cells")
 
     # Use bfloat16 for all models (avoids NaN on Qwen at float16)
     dtype = torch.bfloat16
@@ -291,7 +299,7 @@ def run_experiment() -> None:
     print("Model loaded.\n")
 
     results = []
-    for params in COUPLING_GRID:
+    for params in grid:
         result = run_single_condition(
             model=model,
             temperature=params["temperature"],
