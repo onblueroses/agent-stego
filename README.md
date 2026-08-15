@@ -11,10 +11,11 @@ decoder and one that survives transport, realistic controls, and a defender who
 knows what to look for.
 
 This is an alpha research repository. The code contains tested channel mechanics
-and experiment-design safeguards. The numerical reports under `analysis/` are a
-lab notebook, not a benchmark suite. Several historical results are explicitly
-invalidated because the original runs leaked prompt groups, counted incomplete
-payloads as capacity, or lack enough artifact lineage for reproduction.
+and experiment-design safeguards. The numerical reports under `analysis/` and
+`studies/` are a lab notebook, not a benchmark suite. Several historical results
+are explicitly invalidated because the original runs leaked prompt groups,
+counted incomplete payloads as capacity, or lack enough artifact lineage for
+reproduction.
 
 ## Start here
 
@@ -87,6 +88,9 @@ their limits are visible. They do not all describe the current code.
 - [analysis/capacity_transfer_results.md](analysis/capacity_transfer_results.md)
   and [analysis/coupled_probe_results.md](analysis/coupled_probe_results.md) are
   retained for provenance, not as current measurements.
+- The notes under [`studies/`](studies/) record narrow early tool-channel runs.
+  Each note states what evidence is missing and which rerun could qualify its
+  claims.
 
 A fresh result is not ready for a public claim unless it records the source and
 model revisions, payload classification, split unit, seeds, uncertainty method,

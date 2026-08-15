@@ -1,6 +1,16 @@
 # Timing Channel Rehabilitation
 
-The timing channel was declared a negative result in the original research:
+> **Historical, not release-qualified (2026-08-15 audit).** Each encoder below
+> was run for three trials. The note records no same-rig positive control, power
+> statement, or detection limit, so the instrument is untested for rejecting a
+> timing channel. The public checkout also omits the raw `findings/` artifacts
+> and exact source and model revisions. Other inference engines, model families,
+> task distributions, thresholds, token-count carriers, multi-turn aggregation,
+> and deliberate padding remain untried. Next, freeze a rig that first detects a
+> controlled latency bimodality, then evaluate independent tasks with a
+> prespecified power statement.
+
+The original research treated the timing channel as a negative result:
 API batching meant 73% of inter-call latencies were 0.0s, destroying any
 timing signal. This study tests whether local model inference (ollama)
 restores enough latency variance for timing-based encoding.
@@ -23,21 +33,21 @@ inter-call latency, creating a timing channel.
 | Median latency | ~0.0s | 1.0-2.8s |
 | p90 latency | ~0.0s | 1.9-3.7s |
 
-Local inference does produce real, non-zero latencies. The zero-latency
-fraction drops from 73% to 11-25%. This is an improvement, but not
-the near-zero rate needed for reliable binary encoding.
+This run recorded nonzero local-inference latencies. The zero-latency fraction
+dropped from 73% to 14-25%, but the study did not establish the rate required for
+reliable binary encoding.
 
-### But encoding still fails
+### The tested encoders missed the payload
 
 | Channel | Mean BER | Trials |
 |---------|----------|--------|
 | TimingChannel (latency threshold) | 0.812 | 3 |
 | ResponseLengthChannel (short/long text) | 0.854 | 3 |
 
-Both channels produce near-random output (BER ~0.5 = random, 0.8+ = worse
-than random due to length mismatch).
+The run recorded high BER for both channels. Since length mismatch contributes
+errors, these values do not isolate bit-choice accuracy.
 
-### Why it fails
+### Possible explanations for this run
 
 1. **Latency variance is too low.** Local latencies cluster in a narrow band
    (1-3s) without clear bimodal separation. The model can't reliably produce
@@ -55,17 +65,15 @@ than random due to length mismatch).
 
 ## Verdict
 
-**Timing channels remain a negative result even on local models.** The
-improvement from API (73% zero) to local (14-25% zero) is real but
-insufficient. The fundamental problem is that LLMs don't have fine-grained
-control over their own generation time - it's determined by the inference
-engine, not the model's intent.
+The timing carriers were not made to work in this arm. Local inference produced
+fewer zero-latency observations than the historical API cell, but the run lacks
+the positive control and detection limit needed to reject the broader direction.
 
 Possible future approaches:
 - **Token-count channel**: measure completion token count (not wall time)
-  as the signal. Requires per-completion token counting in the trace format.
-  The infrastructure for this is now in place (ToolTrace.token_count field)
-  but needs the agent loop to populate it from completion metadata.
+  as the signal. `ToolTrace.token_count` exists, and the agent loop populates it
+  when provider usage metadata reports a nonzero completion-token count. A new
+  study still needs a declared transport and control design.
 - **Multi-turn accumulation**: spread timing signal across many turns to
   average out noise. Low bandwidth but potentially more reliable.
 - **Deliberate padding**: model outputs exact N tokens of filler text before
