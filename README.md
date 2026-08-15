@@ -50,12 +50,18 @@ Python 3.12 is the supported minimum because that is the lower bound declared in
 
 ## What is here
 
-The repository has two families of experiments.
+The experiments span three carrier surfaces.
 
 Tool-call channels encode information in action choices: which fake tool is
 selected, the order of calls, arguments, timing, or state carried between turns.
 The default harness returns canned responses. Its tool names resemble filesystem,
 shell, and web operations, but the handlers do not perform those operations.
+
+Document and text carriers encode information in representations an agent reads
+or writes: Unicode code points, whitespace, capitalization, JSON key order,
+headings, and composed file content. Most of these baselines run offline; whether
+a real model and transport preserve a given representation is a separate
+measurement.
 
 Token channels use a language model's next-token distribution. The current
 arithmetic coder is a finite-message target-point baseline. It is useful for
