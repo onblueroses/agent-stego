@@ -1,0 +1,187 @@
+# Activation Probes Under Distribution Coupling
+
+> **SUPERSEDED (2026-05-02).** A deep audit of this run found two issues:
+> normal-text controls were not per-pair length-matched to their stego pairs
+> (so the probe could exploit length correlation), and the encrypted+aggressive
+> cell at 7B was N=40 (CI ±0.16). Both were rerun on Vast.ai with per-pair
+> length-matching and N=80 on the headline cell. The corrected numbers are in
+> [rerun_2026-05-02_lengthmatch.md](rerun_2026-05-02_lengthmatch.md). Headline
+> direction holds (conjunction-only collapse) but absolute AUCs in the
+> probe-transfer table here are not reliable. Kept for provenance.
+>
+> **Further invalidated 2026-07-16:** the superseding rerun also split repeated
+> prompt observations by sample index, leaking exact KEY=none stego duplicates
+> across train and test. No conjunction or transfer conclusion is currently
+> validated.
+
+**Date**: 2026-04-16
+**Compute**: Vast.ai RTX 4090 ($0.315/hr)
+**Models**: Qwen 2.5 3B, 7B
+**Experiment**: 6-condition coupling sweep with activation probes
+
+## Question
+
+Does AUC=1.0 activation detection survive when the entropy gap is closed
+via distribution coupling?
+
+Previous probes used greedy normal baselines, creating an artificial gap.
+This experiment matches conditions: normal text uses stochastic sampling
+with the same (temperature, top_p) as the stego encoder.
+
+## Method
+
+For each of 6 coupling configurations:
+1. Generate 20 normal texts via stochastic sampling (matching temp/top_p)
+2. Generate 20 stego texts via arithmetic coding with same coupling params
+3. Capture hidden states from 10 layers during inference
+4. Train 2-layer MLP activation probe (75/25 train/test split)
+5. Report probe AUC and token-level entropy AUC
+
+All stego uses encryption (SHAKE-256 + nonce) in addition to coupling.
+
+## Results
+
+### 3B - Probes are bulletproof
+
+| Temp | TopP | Probe AUC | Probe Acc | Ent AUC | Ent Gap |
+|------|------|-----------|-----------|---------|---------|
+| 1.0 | 1.00 | 1.000 | 1.000 | 0.677 | 0.883 |
+| 0.9 | 1.00 | 1.000 | 1.000 | 0.655 | 0.900 |
+| 1.0 | 0.90 | 0.960 | 0.900 | 0.678 | 0.633 |
+| 0.9 | 0.90 | 1.000 | 1.000 | 0.645 | 0.450 |
+| 0.8 | 0.90 | 1.000 | 1.000 | 0.693 | 0.552 |
+| 0.7 | 0.85 | 1.000 | 0.900 | 0.658 | 0.255 |
+
+Coupling reduces entropy gap from 0.883 to 0.255 at T=0.7/top_p=0.85,
+but the probe stays at AUC 1.000. The single 0.960 at T=1.0/top_p=0.9
+is likely noise (accuracy still 0.900 with only 10 test samples).
+
+### 7B - Probes weakened but effective
+
+| Temp | TopP | Probe AUC | Probe Acc | Ent AUC | Ent Gap |
+|------|------|-----------|-----------|---------|---------|
+| 1.0 | 1.00 | 1.000 | 1.000 | 0.557 | 0.990 |
+| 0.9 | 1.00 | 1.000 | 0.900 | 0.600 | 0.328 |
+| 1.0 | 0.90 | 1.000 | 0.900 | 0.735 | 0.878 |
+| 0.9 | 0.90 | 0.960 | 0.900 | 0.730 | 0.808 |
+| 0.8 | 0.90 | 0.960 | 0.900 | 0.662 | 0.310 |
+| 0.7 | 0.85 | **0.800** | 0.700 | 0.623 | 0.234 |
+
+Aggressive coupling (T=0.7, top_p=0.85) drops probe AUC from 1.000 to
+0.800. Clear downward trend: tighter coupling = weaker probe.
+
+## Analysis
+
+### The probe detects something beyond entropy
+
+On 3B, the entropy gap drops to 0.255 (tight) but the probe stays at
+1.000. The probe exploits structural differences in hidden states that
+survive even when output token statistics are matched. This is NOT just
+entropy detection at a deeper level - it's a fundamentally different signal.
+
+What the probe likely detects:
+- **Deterministic token selection**: Arithmetic coding picks tokens
+  deterministically (based on message bits), while normal sampling picks
+  stochastically. Even when the marginal distribution matches, the joint
+  distribution of (context, token) differs because stego tokens are
+  selected for a reason unrelated to the context.
+- **Output layer divergence**: Previous cosine similarity analysis showed
+  output layers diverge (cosine ~0.94) while middle layers stay near-unity
+  (~0.999). The prediction head "knows" the next token is atypical for
+  this specific context, even if it's typical in aggregate.
+
+### Model size matters
+
+The 7B model shows weaker probe signal under coupling because larger models
+have broader internal representations. When the 7B's natural sampling already
+uses much of the vocabulary, coupled stego tokens look more like natural
+continuations at the hidden state level too.
+
+**Extrapolation**: If probe AUC drops from 1.000 (3B) to 0.800 (7B) at
+aggressive coupling, models at 14B+ may push below 0.7. At 70B+ with
+aggressive coupling, activation probes might approach chance. This is the
+most important follow-up experiment.
+
+### Token-level entropy detection update
+
+With proper stochastic baselines (not greedy), entropy AUC ranges
+0.557-0.735 depending on coupling. This is lower than the previous
+oriented AUC of ~0.85, partly because the baselines are now correct
+(stochastic, not greedy) and partly because coupling helps.
+
+The best entropy AUC (0.557 at raw 7B) is near chance. Coupled 3B achieves
+0.645 at best - still detectable but much weaker than raw 0.865.
+
+## Implications
+
+1. **Activation probes are the real defense.** Token-level detection can
+   be largely defeated by coupling. Activation probes survive on small
+   models but weaken on larger ones.
+
+2. **The threat model has three tiers:**
+   - External observer (output only): coupling + encryption ≈ undetectable
+   - Inference provider (hidden states): detectable on small models,
+     weakening signal on larger models
+   - Same-model defender (full access): always detectable via training-time
+     countermeasures
+
+3. **Next research directions:**
+   - Test 14B+ models to map the probe AUC curve vs model size
+   - Adversarial training: can stego be trained to minimize probe signal?
+   - Probe transfer: does a 3B-trained probe detect 7B stego?
+   - More coupling params: finer grid around T=0.6-0.8, top_p=0.8-0.95
+
+## 14B Results - Model Size Scaling
+
+Tested Qwen 2.5 14B on RTX A6000 (48GB) to check if probe AUC continues
+declining with model size.
+
+### 14B - Probes remain strong
+
+| Temp | TopP | Probe AUC | Probe Acc | Ent AUC | Ent Gap |
+|------|------|-----------|-----------|---------|---------|
+| 1.0 | 1.00 | 1.000 | 0.900 | 0.727 | 1.454 |
+| 0.9 | 1.00 | 1.000 | 1.000 | 0.540 | 0.263 |
+| 1.0 | 0.90 | 1.000 | 1.000 | 0.698 | 0.939 |
+| 0.9 | 0.90 | 1.000 | 1.000 | 0.775 | 0.944 |
+| 0.8 | 0.90 | 0.920 | 0.800 | 0.695 | 0.528 |
+| 0.7 | 0.85 | 0.920 | 0.800 | 0.628 | 0.285 |
+
+### Cross-Model Scaling Summary
+
+| Model | Probe AUC (T=0.7, p=0.85) | Probe AUC (T=0.8, p=0.9) |
+|-------|---------------------------|--------------------------|
+| 3B | 1.000 | 1.000 |
+| 7B | 0.800 | 0.960 |
+| 14B | 0.920 | 0.920 |
+
+The scaling curve is NOT monotonically decreasing. The 7B shows weaker
+probe signal than 14B at aggressive coupling. This could be:
+
+1. **Architecture-specific**: 7B's hidden state geometry may happen to be
+   more favorable for masking stego activation patterns
+2. **Small sample noise**: Only 5 test samples per class (N=20, 75/25 split).
+   The 7B's 0.800 is within noise margin of 0.920
+3. **Distribution shape**: 14B may have sharper distributions than 7B in
+   some contexts, giving the probe more signal to exploit
+
+**Key finding**: Activation probes do NOT collapse with scale. Even at 14B
+with aggressive coupling, the probe maintains AUC 0.920. The "probes weaken
+on larger models" hypothesis from the 3B/7B comparison was premature - the
+relationship is non-monotonic.
+
+**Implication**: Activation probes are a robust defense across model sizes
+tested (3B-14B). Defeating them likely requires adversarial training (active
+countermeasure), not just passive distribution coupling.
+
+## Open Questions
+
+1. **Adversarial stego training**: Can we optimize token selection to
+   minimize both entropy gap AND activation divergence simultaneously?
+   This is the remaining viable attack angle.
+2. **Probe architecture**: Would a deeper probe (3+ layers, attention)
+   recover full AUC on 7B/14B coupled stego?
+3. **Capacity cost**: Does aggressive coupling (T=0.7) significantly
+   reduce bits/token? Is there a capacity-detectability Pareto frontier?
+4. **Larger models**: Would 32B/70B show different behavior? Requires
+   multi-GPU or quantization to test.

@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      # v7.0.1, pinned to the release commit to prevent tag retargeting.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # v10.0.1, pinned to the release commit to prevent tag retargeting.
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          enable-cache: true
+
+      # Python 3.12 is the package's declared minimum supported interpreter.
+      - run: uv python install 3.12
+      - run: uv sync --locked --extra dev --extra token --python 3.12
+      - run: uv run --python 3.12 ruff format --check .
+      - run: uv run --python 3.12 ruff check .
+      - run: uv run --python 3.12 pyright src/ experiments/
+      - run: uv run --python 3.12 pytest tests/
+      - name: Audit the complete locked dependency graph
+        run: >-
+          uv export --locked --all-extras --no-emit-project
+          --format requirements-txt |
+          uv run --python 3.12 pip-audit -r /dev/stdin
+          --no-deps --disable-pip --strict --progress-spinner off
+
+      # v3.0.0, pinned to the release commit to prevent tag retargeting.
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
