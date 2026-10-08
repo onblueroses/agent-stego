@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
 
       # v10.0.1, pinned to the release commit to prevent tag retargeting.
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           # uv resolves the dependency graph, so its own version is pinned too.
           # setup-uv v10.0.1 embeds checksums only through uv 0.12.4 and skips
