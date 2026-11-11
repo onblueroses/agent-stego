@@ -22,12 +22,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # v10.0.1, pinned to the release commit to prevent tag retargeting.
+      # v10.3.3, pinned to the release commit to prevent tag retargeting.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           # uv resolves the dependency graph, so its own version is pinned too.
-          # setup-uv v10.0.1 embeds checksums only through uv 0.12.4 and skips
-          # validation when it has none, so 0.12.5 supplies its own.
+          # Keep an explicit checksum for the pinned uv binary.
           version: "0.12.5"
           checksum: "68a509da24b06b4223a1c0175fb5eb5bc79342b76cbeff0cfe51ac3f5b17b6b2"
           enable-cache: true
